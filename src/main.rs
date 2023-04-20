@@ -1,6 +1,6 @@
-use ferris_says::say;
-use std::io::{stdout, BufWriter};
 use std::path::PathBuf;
+use std::process::Command;
+
 use colored::*;
 use clap::Parser;
 use git2::{Repository, StatusOptions};
@@ -9,23 +9,21 @@ use git2::{Repository, StatusOptions};
 #[derive(Parser)]
 struct Args {
     command: String,
-    argument: String,
+    args: Vec<String>,
 }
 
 fn main() {
     let args = Args::parse();
 
     if args.command == "clone" {
-        let url = args.argument;
+        let url = args.args[0].to_owned();
         let repo = match Repository::clone(&url, "./test") {
             Ok(repo) => repo,
             Err(e) => panic!("Failed to clone repo: {}", e),
         };
-
         println!("Repo cloned to: {}\n", repo.path().parent().unwrap().to_string_lossy().bold());
-    }
 
-    if args.command == "status" {
+    } else if args.command == "status" {
         let repo = match Repository::open(".") {
             Ok(repo) => repo,
             Err(e) => panic!("No repo in current dir: {}", e),
@@ -107,12 +105,25 @@ fn main() {
             }
             println!();
         }
+
+    } else {
+        let mut combined_args = vec![args.command];
+        combined_args.extend(args.args);
+        let git_command = "git";
+    
+        let output = Command::new(git_command)
+            .args(combined_args)
+            .output()
+            .expect(&format!("Failed to execute command '{}'", git_command));
+    
+        if output.status.success() {
+            let result = String::from_utf8_lossy(&output.stdout);
+            if !result.is_empty() {
+                println!("Command output: {}", result);
+            }
+        } else {
+            let result = String::from_utf8_lossy(&output.stderr);
+            println!("Command error: {}", result);
+        }
     }
-
-    let stdout = stdout();
-    let message = "Good git!";
-    let width = message.chars().count();
-
-    let mut writer = BufWriter::new(stdout.lock());
-    say(&message, width, &mut writer).unwrap();
 } 
