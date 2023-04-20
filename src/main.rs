@@ -123,7 +123,9 @@ fn main() {
             }
         } else {
             let result = String::from_utf8_lossy(&output.stderr);
-            println!("Command error: {}", result);
+            if !result.is_empty() {
+                println!("Command error: {}", result);
+            }
         }
     }
 } 
