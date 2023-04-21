@@ -1,29 +1,27 @@
-use std::path::PathBuf;
-use std::process::Command;
+use std::{env, path::PathBuf, process::Command};
 
 use colored::*;
-use clap::Parser;
 use git2::{Repository, StatusOptions};
 
-
-#[derive(Parser)]
-struct Args {
-    command: String,
-    args: Vec<String>,
-}
-
 fn main() {
-    let args = Args::parse();
+    let cli_args: Vec<String> = env::args().collect();
 
-    if args.command == "clone" {
-        let url = args.args[0].to_owned();
+    let command = cli_args[1].clone();
+
+    let mut args = Vec::new();
+    for arg in cli_args.iter().skip(1) {
+        args.push(arg.clone());
+    }
+
+    if command == "clone" || command == "c" {
+        let url = args[0].to_owned();
         let repo = match Repository::clone(&url, "./test") {
             Ok(repo) => repo,
             Err(e) => panic!("Failed to clone repo: {}", e),
         };
         println!("Repo cloned to: {}\n", repo.path().parent().unwrap().to_string_lossy().bold());
 
-    } else if args.command == "status" {
+    } else if command == "status" || command == "s" {
         let repo = match Repository::open(".") {
             Ok(repo) => repo,
             Err(e) => panic!("No repo in current dir: {}", e),
@@ -107,15 +105,16 @@ fn main() {
         }
 
     } else {
-        let mut combined_args = vec![args.command];
-        combined_args.extend(args.args);
         let git_command = "git";
     
+        let command_str = format!("{} {}", git_command, args.join(" "));
+        println!("The shell command being executed is: {}", command_str);
+
         let output = Command::new(git_command)
-            .args(combined_args)
+            .args(args)
             .output()
             .expect(&format!("Failed to execute command '{}'", git_command));
-    
+
         if output.status.success() {
             let result = String::from_utf8_lossy(&output.stdout);
             if !result.is_empty() {
