@@ -3,6 +3,7 @@ use std::{env, path::PathBuf, process::Command};
 use colored::*;
 use git2::{Repository, StatusOptions};
 
+
 fn main() {
     let cli_args: Vec<String> = env::args().collect();
 
@@ -13,14 +14,13 @@ fn main() {
         args.push(arg.clone());
     }
 
-    if command == "clone" || command == "c" {
-        clone(args);
-    } else if command == "status" || command == "s" {
-        status(args);
-    } else {
-        default(args)
+    match command.as_str() {
+        "clone" | "c" => clone(args),
+        "status" | "s" => status(args),
+        _ => default(args),
     }
 }
+
 
 fn clone(args: Vec<String>) {
     let url = args[1].to_owned();
@@ -30,6 +30,7 @@ fn clone(args: Vec<String>) {
     };
     println!("Repo cloned to: {}\n", repo.path().parent().unwrap().to_string_lossy().bold());
 }
+
 
 fn status(_args: Vec<String>) {
     let repo = match Repository::open(".") {
@@ -114,6 +115,7 @@ fn status(_args: Vec<String>) {
         println!();
     }
 }
+
 
 fn default(args: Vec<String>) {
     let default_command = "git";
