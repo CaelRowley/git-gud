@@ -131,12 +131,12 @@ fn default(args: Vec<String>) {
     if output.status.success() {
         let result = String::from_utf8_lossy(&output.stdout);
         if !result.is_empty() {
-            println!("Command output: {}", result);
+            println!("Output: {}", result.bold());
         }
     } else {
         let result = String::from_utf8_lossy(&output.stderr);
         if !result.is_empty() {
-            println!("Command error: {}", result);
+            println!("{}", format!("Error: {}", result.bold()).red());
         }
     }
 }
