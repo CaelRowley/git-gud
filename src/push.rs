@@ -1,4 +1,6 @@
-use git2::{Cred, Repository, PushOptions, RemoteCallbacks};
+use std::process::Command;
+
+use git2::{Repository};
 use colored::*;
 
 
@@ -7,41 +9,38 @@ pub fn push(_args: Vec<String>) {
         Ok(repo) => repo,
         Err(e) => panic!("No repo in current dir: {}", e),
     };
-    let mut remote = match repo.find_remote("origin") {
-        Ok(remote) => remote,
-        Err(e) => panic!("No origin remote found: {}", e),
-    };
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|_, _, _| {
-        let username = "your_username";
-        let password = "your_password";
-
-        Cred::userpass_plaintext(username, password)
-    });
-
-    let mut push_options = PushOptions::new();
-    push_options.remote_callbacks(callbacks);
-
     let head = repo.head().unwrap();
-    let branch_name = head.name().unwrap();
+    let branch_name = head.shorthand().unwrap();
 
-    let refspec = format!("{}:{}", branch_name, branch_name);
-    let push_refs = vec![&refspec];
-
-
-    match remote.push(&push_refs, Some(&mut push_options)) {
-        Ok(remote) => remote,
-        Err(e) => panic!("No origin remote found: {}", e),
-    };
-
-    print!("Donezo!!!!");
-
+    let mut push_args = vec![];
     match branch_name {
         "main" | "master" => {
-            print!("On master!!!")
+            push_args.push("push")
         }
         _ => {
-            print!("On {}", branch_name.bold())
+            push_args.extend(["push", "--set-upstrea", "origin", branch_name])
+        }
+    }
+
+    let default_command = "git";
+
+    let command_str = format!("{} {}", default_command, push_args.join(" "));
+    println!("Running default command: {}", command_str.bold());
+
+    let output = Command::new(default_command)
+        .args(push_args)
+        .output()
+        .expect(&format!("Failed to execute command '{}'", default_command));
+
+    if output.status.success() {
+        let result = String::from_utf8_lossy(&output.stdout);
+        if !result.is_empty() {
+            println!("Output: {}", result.bold());
+        }
+    } else {
+        let result = String::from_utf8_lossy(&output.stderr);
+        if !result.is_empty() {
+            println!("{}", format!("Error: {}", result.bold()).red());
         }
     }
 }
