@@ -25,7 +25,8 @@ pub fn push(_args: Vec<String>) {
     let default_command = "git";
 
     let command_str = format!("{} {}", default_command, push_args.join(" "));
-    println!("Running default command: {}", command_str.bold());
+    println!("Running: {}", command_str.bold());
+    println!();
 
     let output = Command::new(default_command)
         .args(push_args)
