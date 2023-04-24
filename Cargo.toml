@@ -2,6 +2,17 @@
 name = "good-git"
 version = "0.1.0"
 edition = "2021"
+authors = ["Cael Rowley <drdeus@pm.me>"]
+license = "MIT"
+description = """
+good-git is just an experimental cli tool I am working on that is a wrapper around git.
+The tool provides some extra functionality ontop of git, and if a custom command is not found
+it will default to using git. This tool requires git to be installed and have "git" in your PATH
+"""
+documentation = "https://gitlab.com/CaelRowley/good-git"
+homepage = "https://gitlab.com/CaelRowley/good-git"
+repository = "https://gitlab.com/CaelRowley/good-git"
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -10,3 +21,7 @@ clap = { version = "4.2.2", features = ["derive"] }
 colored = "2.0.0"
 ferris-says = "0.3.1"
 git2 = "0.17.1"
+
+[[bin]]
+name = "gg"
+path = "src/main.rs"

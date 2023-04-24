@@ -18,7 +18,7 @@ pub fn push(_args: Vec<String>) {
             push_args.push("push")
         }
         _ => {
-            push_args.extend(["push", "--set-upstrea", "origin", branch_name])
+            push_args.extend(["push", "--set-upstream", "origin", branch_name])
         }
     }
 
