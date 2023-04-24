@@ -2,6 +2,7 @@ use std::env;
 
 mod clone;
 mod status;
+mod push;
 mod default;
 
 
@@ -18,6 +19,7 @@ fn main() {
     match command.as_str() {
         "clone" | "c" => clone::clone(args),
         "status" | "s" => status::status(args),
+        "push" | "p" => push::push(args),
         _ => default::default(args),
     }
 }
