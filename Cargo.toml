@@ -1,13 +1,11 @@
 [package]
 name = "git-gud"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Cael Rowley <drdeus@pm.me>"]
 license = "MIT"
 description = """
-Git Gud is just an experimental cli tool I am working on that is a wrapper around git.
-The tool provides some extra functionality ontop of git, and if a custom command is not found
-it will default to using git. This tool requires git to be installed and have "git" in your PATH
+git-gud is a CLI tool for using git with some improved features.
 """
 documentation = "https://gitlab.com/CaelRowley/git-gud"
 homepage = "https://gitlab.com/CaelRowley/git-gud"
