@@ -1,5 +1,5 @@
 [package]
-name = "git gud"
+name = "git-gud"
 version = "0.1.1"
 edition = "2021"
 authors = ["Cael Rowley <drdeus@pm.me>"]

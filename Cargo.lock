@@ -55,6 +55,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-gud"
+version = "0.1.1"
+dependencies = [
+ "colored",
+ "git2",
+]
+
+[[package]]
 name = "git2"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -67,14 +75,6 @@ dependencies = [
  "openssl-probe",
  "openssl-sys",
  "url",
-]
-
-[[package]]
-name = "good-git"
-version = "0.1.1"
-dependencies = [
- "colored",
- "git2",
 ]
 
 [[package]]
