@@ -1,14 +1,13 @@
-# Good Git
-
+# Git Gud
 
 
 ## Getting started
 
-good-git is just an experimental cli tool I am working on that is a wrapper around git.
+Git Gud is just an experimental cli tool I am working on that is a wrapper around git.
 The tool provides some extra functionality ontop of git, and if a custom command is not found
 it will default to using git. This tool requires git to be installed and have "git" in your PATH
 
-To use this tool you can use the command `gg` for "good-git". 
+To use this tool you can use the command `gg` for "git gud". 
 This command is a wrapper around git so will contain all of the same functionality as git, for example you can run
 `gg checkout -b some-branch` it will behave the same as `git checkout -b some-branch`
 
