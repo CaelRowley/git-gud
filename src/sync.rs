@@ -58,7 +58,7 @@ fn sync_on_branch(branch_name: &str, repo: &Repository) {
     run_command(["checkout", main_branch_name].to_vec());
     run_command(["pull", "--rebase"].to_vec());
     run_command(["checkout", branch_name].to_vec());
-    run_command(["rebase", "master"].to_vec());
+    run_command(["rebase", main_branch_name].to_vec());
 }
 
 
