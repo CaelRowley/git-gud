@@ -1,6 +1,6 @@
 # Git Gud
 
-git-gud is a CLI tool for using git with some improved features. This is a work in progress but is still very usable, because it default to using `git` if there is no custom implementation.
+git-gud is a CLI tool for using git with some improved features. This is a **work in progress** but is still very **usable**, because it default to using `git` if there is no custom implementation.
 
 ## Install
 - You will need to [install git](https://git-scm.com/downloads).
