@@ -16,6 +16,7 @@ Here is the list of custom commands
 | `gg status` <br/> `gg s` | `git status` |
 | `gg clone ${url}` <br/> `gg c ${url}` | `git clone ${url}` |
 | `gg push` <br/> `gg p` | When on main: `git push` <br/>When on a branch: `git push --set-upstream branch-name`|
+| `gg sync` | `git pull --rebase` if on master, but if on a branch, it will pull the latest changes onto master, and then rebase master on your current branch |
 
 
 If you run a command that is not implemented, for example `gg checkout -b some-branch` it will default to git and run the equivalent of `git checkout -b some-branch`
