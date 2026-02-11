@@ -11,3 +11,4 @@ mod test_sw;
 mod test_today;
 mod test_standup;
 mod test_passthrough;
+mod test_lfs;

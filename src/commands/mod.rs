@@ -1,5 +1,6 @@
 pub mod amend;
 pub mod clean_branches;
+pub mod lfs;
 pub mod pr;
 pub mod push;
 pub mod quick_commit;
@@ -13,6 +14,7 @@ pub mod undo;
 
 pub use amend::AmendArgs;
 pub use clean_branches::CleanBranchesArgs;
+pub use lfs::LfsArgs;
 pub use pr::PrArgs;
 pub use push::PushArgs;
 pub use quick_commit::QuickCommitArgs;

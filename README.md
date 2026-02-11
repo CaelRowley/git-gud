@@ -136,6 +136,62 @@ Show commits since last workday (for standup meetings).
 | `-a, --all` | Show all authors, not just yours |
 | `-d, --days <N>` | Look back N days instead of auto-detecting |
 
+### `gg lfs`
+
+Large File Storage - store large files in AWS S3 instead of git.
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `install` | Install git hooks for automatic LFS push/pull |
+| `uninstall` | Remove LFS git hooks |
+| `track <pattern>` | Track files matching pattern with LFS (e.g., `*.psd`) |
+| `untrack <pattern>` | Stop tracking a pattern |
+| `push` | Upload LFS files to remote storage |
+| `pull` | Download LFS files from remote storage |
+| `status` | Show LFS configuration, patterns, and file status |
+| `verify` | Test S3 configuration and connectivity |
+
+**Setup:**
+```bash
+gg lfs install                  # Install hooks and create config
+# Edit .gg/lfs.toml with your S3 bucket details
+gg lfs track "*.psd"            # Track Photoshop files
+gg lfs track "assets/**"        # Track entire directory
+```
+
+**Configuration (.gg/lfs.toml):**
+```toml
+[storage]
+provider = "s3"
+bucket = "my-lfs-bucket"
+region = "us-east-1"
+# prefix = "project-name/"      # Optional prefix
+# endpoint = "https://..."      # For S3-compatible services
+```
+
+**Push/Pull flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-n, --dry-run` | Show what would be uploaded/downloaded |
+| `-a, --all` | Push all LFS files, not just staged (push only) |
+| `-i, --include <pattern>` | Include only matching files (pull only) |
+| `-e, --exclude <pattern>` | Exclude matching files (pull only) |
+
+**Status flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-v, --verbose` | Show detailed file information |
+
+**Verify flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-w, --write` | Also test write permissions by uploading a small test file |
+
 ### Git Fallback
 
 Any unrecognized command passes through to git with full colors preserved:

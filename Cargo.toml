@@ -19,6 +19,18 @@ clap = { version = "4", features = ["derive"] }
 colored = "2"
 git2 = "0.17"
 
+# LFS dependencies
+aws-sdk-s3 = "1.76"
+aws-config = { version = "1.5.5", features = ["behavior-version-latest"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+sha2 = "0.10"
+glob = "0.3"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+dirs = "5"
+thiserror = "1"
+async-trait = "0.1"
+
 [[bin]]
 name = "gg"
 path = "src/main.rs"

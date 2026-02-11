@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod config;
 mod git;
+mod lfs;
 mod utils;
 
 #[derive(Parser)]
@@ -56,6 +57,9 @@ enum Commands {
 
     /// Show commits since last workday (for standups)
     Standup(commands::StandupArgs),
+
+    /// Large file storage (LFS) commands
+    Lfs(commands::LfsArgs),
 }
 
 fn main() {
@@ -77,6 +81,7 @@ fn main() {
         Some(Commands::Sw(args)) => commands::sw::run(args),
         Some(Commands::Today(args)) => commands::today::run(args),
         Some(Commands::Standup(args)) => commands::standup::run(args),
+        Some(Commands::Lfs(args)) => commands::lfs::run(args),
         None if cli.args.is_empty() => {
             // No args at all: show git status (common default)
             git::run(&["status"])

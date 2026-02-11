@@ -14,3 +14,6 @@ assets/git-gud.png
 
 # Cursor files
 .cursor
+
+# gg-lfs config (contains credentials)
+.gg/
