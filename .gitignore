@@ -11,3 +11,6 @@ target/
 
 # image files
 assets/git-gud.png
+
+# Cursor files
+.cursor

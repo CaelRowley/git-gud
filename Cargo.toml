@@ -15,8 +15,9 @@ repository = "https://gitlab.com/CaelRowley/git-gud"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-colored = "2.0.0"
-git2 = "0.17.1"
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+git2 = "0.17"
 
 [[bin]]
 name = "gg"
