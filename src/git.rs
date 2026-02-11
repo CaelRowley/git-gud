@@ -28,6 +28,7 @@ pub fn run(args: &[&str]) -> i32 {
 }
 
 /// Run a sequence of git commands, stopping on first failure.
+#[allow(dead_code)]
 pub fn run_sequence(commands: &[&[&str]]) -> i32 {
     for cmd in commands {
         let code = run(cmd);
@@ -50,5 +51,58 @@ pub fn capture(args: &[&str]) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_capture_git_version() {
+        let result = capture(&["--version"]);
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("git version"));
+    }
+
+    #[test]
+    fn test_capture_invalid_command() {
+        let result = capture(&["not-a-real-command-12345"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_returns_zero_on_success() {
+        // git --version should succeed
+        let code = run(&["--version"]);
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_run_returns_nonzero_on_failure() {
+        // Invalid git command should fail
+        let code = run(&["not-a-real-command-12345"]);
+        assert_ne!(code, 0);
+    }
+
+    #[test]
+    fn test_run_sequence_stops_on_failure() {
+        let commands: &[&[&str]] = &[
+            &["--version"],                  // succeeds
+            &["not-a-real-command-12345"],   // fails
+            &["--version"],                  // should not run
+        ];
+        let code = run_sequence(commands);
+        assert_ne!(code, 0);
+    }
+
+    #[test]
+    fn test_run_sequence_all_succeed() {
+        let commands: &[&[&str]] = &[
+            &["--version"],
+            &["--version"],
+        ];
+        let code = run_sequence(commands);
+        assert_eq!(code, 0);
     }
 }

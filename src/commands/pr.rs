@@ -77,3 +77,57 @@ fn open_url(url: &str) -> Result<i32, Box<dyn std::error::Error>> {
 
     Ok(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_pr_url_github_ssh() {
+        let url = build_pr_url("git@github.com:user/repo.git", "feature-branch").unwrap();
+        assert_eq!(url, "https://github.com/user/repo/compare/feature-branch?expand=1");
+    }
+
+    #[test]
+    fn test_build_pr_url_github_https() {
+        let url = build_pr_url("https://github.com/user/repo.git", "my-branch").unwrap();
+        assert_eq!(url, "https://github.com/user/repo/compare/my-branch?expand=1");
+    }
+
+    #[test]
+    fn test_build_pr_url_github_no_git_suffix() {
+        let url = build_pr_url("https://github.com/user/repo", "branch").unwrap();
+        assert_eq!(url, "https://github.com/user/repo/compare/branch?expand=1");
+    }
+
+    #[test]
+    fn test_build_pr_url_gitlab_ssh() {
+        let url = build_pr_url("git@gitlab.com:user/repo.git", "feature").unwrap();
+        assert_eq!(url, "https://gitlab.com/user/repo/-/merge_requests/new?merge_request[source_branch]=feature");
+    }
+
+    #[test]
+    fn test_build_pr_url_gitlab_https() {
+        let url = build_pr_url("https://gitlab.com/user/repo.git", "branch").unwrap();
+        assert_eq!(url, "https://gitlab.com/user/repo/-/merge_requests/new?merge_request[source_branch]=branch");
+    }
+
+    #[test]
+    fn test_build_pr_url_bitbucket_ssh() {
+        let url = build_pr_url("git@bitbucket.org:user/repo.git", "feature").unwrap();
+        assert_eq!(url, "https://bitbucket.org/user/repo/pull-requests/new?source=feature");
+    }
+
+    #[test]
+    fn test_build_pr_url_unknown_host() {
+        let url = build_pr_url("https://git.company.com/user/repo.git", "branch").unwrap();
+        // Should return the base URL as fallback
+        assert_eq!(url, "https://git.company.com/user/repo");
+    }
+
+    #[test]
+    fn test_build_pr_url_trims_whitespace() {
+        let url = build_pr_url("  git@github.com:user/repo.git  \n", "branch").unwrap();
+        assert_eq!(url, "https://github.com/user/repo/compare/branch?expand=1");
+    }
+}

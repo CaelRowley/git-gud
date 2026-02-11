@@ -1,0 +1,13 @@
+mod test_status;
+mod test_push;
+mod test_sync;
+mod test_quick_commit;
+mod test_amend;
+mod test_undo;
+mod test_pr;
+mod test_clean_branches;
+mod test_recent;
+mod test_sw;
+mod test_today;
+mod test_standup;
+mod test_passthrough;
