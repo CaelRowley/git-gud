@@ -56,6 +56,86 @@ gg qc "add feature" -A        # Commit everything including new files
 gg qc "ready for review" -Ap  # Commit all and push
 ```
 
+### `gg amend`
+
+Amend the last commit.
+
+| Flag | Description |
+|------|-------------|
+| `-a, --all` | Stage all changes before amending |
+| `-e, --edit` | Edit the commit message (default: keep existing message) |
+
+### `gg undo [count]`
+
+Undo the last commit(s), keeping changes staged.
+
+| Argument/Flag | Description |
+|---------------|-------------|
+| `count` | Number of commits to undo (default: 1) |
+| `--hard` | Discard changes entirely (hard reset) |
+
+**Examples:**
+```bash
+gg undo           # Undo last commit, keep changes staged
+gg undo 3         # Undo last 3 commits
+gg undo --hard    # Undo and discard changes
+```
+
+### `gg pr`
+
+Open PR/MR creation page in browser. Supports GitHub, GitLab, and Bitbucket.
+
+| Flag | Description |
+|------|-------------|
+| `-p, --print` | Just print the URL, don't open browser |
+
+### `gg clean-branches`
+
+Delete local branches that have been merged into main/master.
+
+| Flag | Description |
+|------|-------------|
+| `-f, --force` | Actually delete branches (dry-run by default) |
+
+### `gg recent`
+
+List recently checked out branches.
+
+| Flag | Description |
+|------|-------------|
+| `-c, --count <N>` | Number of branches to show (default: 10) |
+
+### `gg sw [number]`
+
+Switch to a recent branch. Interactive if no number provided.
+
+| Argument | Description |
+|----------|-------------|
+| `number` | Branch number from `gg recent` to switch to |
+
+**Examples:**
+```bash
+gg sw      # Interactive: shows list and prompts
+gg sw 2    # Switch to 2nd most recent branch
+```
+
+### `gg today`
+
+Show commits made today.
+
+| Flag | Description |
+|------|-------------|
+| `-a, --all` | Show all authors, not just yours |
+
+### `gg standup`
+
+Show commits since last workday (for standup meetings).
+
+| Flag | Description |
+|------|-------------|
+| `-a, --all` | Show all authors, not just yours |
+| `-d, --days <N>` | Look back N days instead of auto-detecting |
+
 ### Git Fallback
 
 Any unrecognized command passes through to git with full colors preserved:

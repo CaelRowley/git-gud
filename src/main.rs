@@ -32,6 +32,30 @@ enum Commands {
     /// Quick commit: stage and commit in one step
     #[command(visible_alias = "qc")]
     QuickCommit(commands::QuickCommitArgs),
+
+    /// Amend the last commit
+    Amend(commands::AmendArgs),
+
+    /// Undo the last commit(s), keeping changes staged
+    Undo(commands::UndoArgs),
+
+    /// Open PR creation page in browser
+    Pr(commands::PrArgs),
+
+    /// Delete local branches that have been merged
+    CleanBranches(commands::CleanBranchesArgs),
+
+    /// List recently checked out branches
+    Recent(commands::RecentArgs),
+
+    /// Switch to a recent branch (interactive)
+    Sw(commands::SwArgs),
+
+    /// Show commits made today
+    Today(commands::TodayArgs),
+
+    /// Show commits since last workday (for standups)
+    Standup(commands::StandupArgs),
 }
 
 fn main() {
@@ -45,6 +69,14 @@ fn main() {
         Some(Commands::Push(args)) => commands::push::run(args),
         Some(Commands::Sync(args)) => commands::sync::run(args),
         Some(Commands::QuickCommit(args)) => commands::quick_commit::run(args),
+        Some(Commands::Amend(args)) => commands::amend::run(args),
+        Some(Commands::Undo(args)) => commands::undo::run(args),
+        Some(Commands::Pr(args)) => commands::pr::run(args),
+        Some(Commands::CleanBranches(args)) => commands::clean_branches::run(args),
+        Some(Commands::Recent(args)) => commands::recent::run(args),
+        Some(Commands::Sw(args)) => commands::sw::run(args),
+        Some(Commands::Today(args)) => commands::today::run(args),
+        Some(Commands::Standup(args)) => commands::standup::run(args),
         None if cli.args.is_empty() => {
             // No args at all: show git status (common default)
             git::run(&["status"])
