@@ -1,28 +1,74 @@
 # Git Gud
 
-git-gud is a CLI tool for using git with some improved features. This is a **work in progress** but is still very **usable**, because it default to using `git` if there is no custom implementation.
+A smarter git CLI wrapper with sensible defaults. Any command not implemented falls back to git with full color and interactivity preserved.
 
 ## Install
-- You will need to [install git](https://git-scm.com/downloads).
-- You will also need to [install rust and cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html).
-- Then run ```cargo install git-gud```
+
+- [Install git](https://git-scm.com/downloads)
+- [Install rust and cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+- Run `cargo install git-gud`
 
 ## Commands
 
-Here is the list of custom commands
+### `gg status` (alias: `s`)
 
-| `gg` | `git` |
-| ----- | ----- |
-| `gg status` <br/> `gg s` | `git status` |
-| `gg clone ${url}` <br/> `gg c ${url}` | `git clone ${url}` |
-| `gg push` <br/> `gg p` | When on main: `git push` <br/>When on a branch: `git push --set-upstream branch-name`|
-| `gg sync` | `git pull --rebase` if on master, but if on a branch, it will pull the latest changes onto master, and then rebase master on your current branch |
+Custom status view with grouped changes.
 
+| Flag | Description |
+|------|-------------|
+| `-s, --short` | Show short format (delegates to `git status -s`) |
 
-If you run a command that is not implemented, for example `gg checkout -b some-branch` it will default to git and run the equivalent of `git checkout -b some-branch`
+### `gg push` (alias: `p`)
+
+Smart push with auto-upstream for branches.
+
+- On main/master: runs `git push`
+- On a branch: runs `git push --set-upstream origin <branch>` if no upstream is set
+
+| Flag | Description |
+|------|-------------|
+| `-f, --force` | Force push with `--force-with-lease` |
+
+### `gg sync`
+
+Sync your branch with main/master.
+
+- On main/master: runs `git pull --rebase`
+- On a branch: stashes changes, checks out main, pulls, checks out your branch, rebases on main, pops stash
+
+| Flag | Description |
+|------|-------------|
+| `--no-stash` | Don't stash changes before syncing |
+
+### `gg quick-commit <message>` (alias: `qc`)
+
+Stage and commit in one step.
+
+| Flag | Description |
+|------|-------------|
+| `-A, --all` | Stage all changes including untracked files (`git add -A`) |
+| `-p, --push` | Push after committing |
+
+**Examples:**
+```bash
+gg qc "fix typo"              # Commit tracked changes only
+gg qc "add feature" -A        # Commit everything including new files
+gg qc "ready for review" -Ap  # Commit all and push
+```
+
+### Git Fallback
+
+Any unrecognized command passes through to git with full colors preserved:
+
+```bash
+gg log --oneline -10    # → git log --oneline -10
+gg checkout -b feature  # → git checkout -b feature
+gg stash pop            # → git stash pop
+```
 
 ![Alt text](assets/git-gud.png)
 
 ## License
+
 MIT
 
