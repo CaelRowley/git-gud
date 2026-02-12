@@ -15,6 +15,8 @@ fn lfs_help_shows_subcommands() {
     assert_eq!(code, 0);
     assert!(stdout.contains("install") || stdout.contains("Install"));
     assert!(stdout.contains("track") || stdout.contains("Track"));
+    assert!(stdout.contains("import") || stdout.contains("Import"));
+    assert!(stdout.contains("migrate") || stdout.contains("Migrate"));
     assert!(stdout.contains("push") || stdout.contains("Push"));
     assert!(stdout.contains("pull") || stdout.contains("Pull"));
     assert!(stdout.contains("status") || stdout.contains("Status"));
@@ -476,6 +478,135 @@ fn lfs_verify_write_flag_accepted() {
 
     // The --write flag should be accepted
     let (_, _, stderr) = repo.gg(&["lfs", "verify", "--write"]);
+    assert!(!stderr.contains("unexpected argument"));
+}
+
+// ============================================
+// LFS Import Tests
+// ============================================
+
+#[test]
+fn lfs_import_help() {
+    let repo = TempRepo::new();
+    let (code, stdout, _) = repo.gg(&["lfs", "import", "--help"]);
+
+    assert_eq!(code, 0);
+    assert!(stdout.contains("dry-run") || stdout.contains("-n"));
+    assert!(stdout.contains("include") || stdout.contains("-i"));
+    assert!(stdout.contains("exclude") || stdout.contains("-e"));
+}
+
+#[test]
+fn lfs_import_no_config_shows_error() {
+    let repo = TempRepo::new();
+
+    repo.gg(&["lfs", "track", "*.psd"]);
+    repo.create_file("test.psd", "fake psd content");
+
+    let (code, stdout, stderr) = repo.gg(&["lfs", "import"]);
+    assert_ne!(code, 0);
+
+    let combined = format!("{}{}", stdout, stderr);
+    assert!(combined.contains("install") || combined.contains("config") || combined.contains("Configuration"));
+}
+
+#[test]
+fn lfs_import_no_patterns_shows_message() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+
+    let (code, stdout, _) = repo.gg(&["lfs", "import"]);
+    assert!(stdout.contains("No LFS patterns") || stdout.contains("track") || code == 0);
+}
+
+#[test]
+fn lfs_import_dry_run() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+    repo.gg(&["lfs", "track", "*.psd"]);
+    repo.create_file("test.psd", "fake psd content");
+
+    let (_, stdout, _) = repo.gg(&["lfs", "import", "-n"]);
+    assert!(stdout.contains("dry run") || stdout.contains("Would") || stdout.contains("Dry run") || stdout.contains("No files"));
+}
+
+#[test]
+fn lfs_import_include_exclude_flags() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+    repo.gg(&["lfs", "track", "*.psd"]);
+
+    // Should accept include and exclude flags without parse error
+    let (_, _, stderr) = repo.gg(&["lfs", "import", "--include", "*.psd", "--exclude", "*.zip"]);
+    assert!(!stderr.contains("unexpected argument"));
+}
+
+// ============================================
+// LFS Migrate Tests (git-lfs -> gg lfs)
+// ============================================
+
+#[test]
+fn lfs_migrate_help() {
+    let repo = TempRepo::new();
+    let (code, stdout, _) = repo.gg(&["lfs", "migrate", "--help"]);
+
+    assert_eq!(code, 0);
+    assert!(stdout.contains("dry-run") || stdout.contains("-n"));
+    assert!(stdout.contains("skip-fetch"));
+    assert!(stdout.contains("keep-gitlfs"));
+}
+
+#[test]
+fn lfs_migrate_no_config_shows_error() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "track", "*.psd"]);
+
+    let (code, stdout, stderr) = repo.gg(&["lfs", "migrate"]);
+    assert_ne!(code, 0);
+
+    let combined = format!("{}{}", stdout, stderr);
+    assert!(combined.contains("install") || combined.contains("config") || combined.contains("Configuration") || combined.contains("git-lfs"));
+}
+
+#[test]
+fn lfs_migrate_no_patterns_shows_error() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+
+    let (code, stdout, stderr) = repo.gg(&["lfs", "migrate", "--skip-fetch"]);
+    let combined = format!("{}{}", stdout, stderr);
+    // Should indicate no LFS patterns found
+    assert!(combined.contains("No LFS patterns") || combined.contains("gitattributes") || combined.contains("git-lfs") || code != 0);
+}
+
+#[test]
+fn lfs_migrate_dry_run() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+    repo.gg(&["lfs", "track", "*.psd"]);
+    repo.create_file("test.psd", "fake psd content");
+
+    let (_, stdout, _) = repo.gg(&["lfs", "migrate", "-n", "--skip-fetch"]);
+    assert!(stdout.contains("dry run") || stdout.contains("Would") || stdout.contains("Dry run") || stdout.contains("No LFS files"));
+}
+
+#[test]
+fn lfs_migrate_skip_fetch_flag() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+
+    // Should accept --skip-fetch without parse error
+    let (_, _, stderr) = repo.gg(&["lfs", "migrate", "-n", "--skip-fetch"]);
+    assert!(!stderr.contains("unexpected argument"));
+}
+
+#[test]
+fn lfs_migrate_keep_gitlfs_flag() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+
+    // Should accept --keep-gitlfs without parse error
+    let (_, _, stderr) = repo.gg(&["lfs", "migrate", "-n", "--skip-fetch", "--keep-gitlfs"]);
     assert!(!stderr.contains("unexpected argument"));
 }
 

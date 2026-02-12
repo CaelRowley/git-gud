@@ -2,7 +2,9 @@
 //!
 //! Provides commands for managing large file storage.
 
+pub mod import;
 pub mod install;
+pub mod migrate;
 pub mod pull;
 pub mod push;
 pub mod status;
@@ -11,7 +13,9 @@ pub mod verify;
 
 use clap::{Args, Subcommand};
 
+pub use import::ImportArgs;
 pub use install::{InstallArgs, UninstallArgs};
+pub use migrate::MigrateArgs;
 pub use pull::PullArgs;
 pub use push::PushArgs;
 pub use status::StatusArgs;
@@ -40,6 +44,12 @@ pub enum LfsCommand {
     /// Stop tracking files matching a pattern
     Untrack(UntrackArgs),
 
+    /// Import existing large files into LFS (upload to S3, replace with pointers)
+    Import(ImportArgs),
+
+    /// Migrate from standard git-lfs to gg lfs
+    Migrate(MigrateArgs),
+
     /// Push LFS files to remote storage
     Push(PushArgs),
 
@@ -60,6 +70,8 @@ pub fn run(args: LfsArgs) -> i32 {
         LfsCommand::Uninstall(args) => install::run_uninstall(args),
         LfsCommand::Track(args) => track::run(args),
         LfsCommand::Untrack(args) => track::run_untrack(args),
+        LfsCommand::Import(args) => import::run(args),
+        LfsCommand::Migrate(args) => migrate::run(args),
         LfsCommand::Push(args) => push::run(args),
         LfsCommand::Pull(args) => pull::run(args),
         LfsCommand::Status(args) => status::run(args),
