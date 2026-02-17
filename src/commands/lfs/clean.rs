@@ -57,8 +57,7 @@ fn run_inner(_args: CleanArgs) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Chain header bytes with remaining stdin into a single reader
-    let remaining = io::Cursor::new(Vec::new()).chain(reader);
-    let chained = io::Cursor::new(header).chain(remaining);
+    let chained = io::Cursor::new(header).chain(reader);
 
     let pointer = Pointer::from_reader(chained, temp_path.as_deref())?;
     let oid = pointer.sha256().to_string();

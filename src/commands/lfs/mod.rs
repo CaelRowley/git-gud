@@ -3,6 +3,7 @@
 //! Provides commands for managing large file storage.
 
 pub mod clean;
+pub mod filter_process;
 pub mod import;
 pub mod install;
 pub mod ls_files;
@@ -18,6 +19,7 @@ pub mod verify;
 use clap::{Args, Subcommand};
 
 pub use clean::CleanArgs;
+pub use filter_process::FilterProcessArgs;
 pub use import::ImportArgs;
 pub use install::{InstallArgs, UninstallArgs};
 pub use ls_files::LsFilesArgs;
@@ -81,6 +83,9 @@ pub enum LfsCommand {
 
     /// Smudge filter (used by git internally — converts pointer to file content)
     Smudge(SmudgeArgs),
+
+    /// Long-running filter process (used by git internally — handles batch clean/smudge)
+    FilterProcess(FilterProcessArgs),
 }
 
 /// Run the LFS command
@@ -100,5 +105,6 @@ pub fn run(args: LfsArgs) -> i32 {
         LfsCommand::Verify(args) => verify::run(args),
         LfsCommand::Clean(args) => clean::run(args),
         LfsCommand::Smudge(args) => smudge::run(args),
+        LfsCommand::FilterProcess(args) => filter_process::run(args),
     }
 }

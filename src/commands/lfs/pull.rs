@@ -25,6 +25,10 @@ pub struct PullArgs {
     /// Called by the post-checkout hook (old-ref new-ref flag)
     #[arg(long, hide = true, num_args = 3, value_names = &["OLD_REF", "NEW_REF", "FLAG"])]
     pub post_checkout: Option<Vec<String>>,
+
+    /// Called by the post-merge hook
+    #[arg(long, hide = true)]
+    pub post_merge: bool,
 }
 
 /// Pull LFS files from remote storage
@@ -77,12 +81,15 @@ async fn run_inner(args: PullArgs) -> Result<(), Box<dyn std::error::Error>> {
     let pointer_files = if let Some(ref checkout_args) = args.post_checkout {
         // Post-checkout mode: only pull files that changed between old and new refs
         find_post_checkout_pointer_files(repo_root, &scanner, checkout_args)?
+    } else if args.post_merge {
+        // Post-merge mode: only pull files that changed in the merge
+        find_post_merge_pointer_files(repo_root, &scanner)?
     } else {
         find_pointer_files(repo_root, &scanner, &args)?
     };
 
     if pointer_files.is_empty() {
-        if args.post_checkout.is_none() {
+        if args.post_checkout.is_none() && !args.post_merge {
             println!("{}", "No LFS pointer files found.".dimmed());
         }
         return Ok(());
@@ -205,8 +212,12 @@ fn find_pointer_files(
 ) -> Result<Vec<(std::path::PathBuf, Pointer)>, Box<dyn std::error::Error>> {
     let mut pointers = Vec::new();
 
-    let include_pattern = args.include.as_ref().map(|p| glob::Pattern::new(p)).transpose()?;
-    let exclude_pattern = args.exclude.as_ref().map(|p| glob::Pattern::new(p)).transpose()?;
+    let include_pattern = args.include.as_ref()
+        .map(|p| globset::Glob::new(p).map(|g| g.compile_matcher()))
+        .transpose()?;
+    let exclude_pattern = args.exclude.as_ref()
+        .map(|p| globset::Glob::new(p).map(|g| g.compile_matcher()))
+        .transpose()?;
 
     // Scan for files matching LFS patterns
     for file_path in scanner.scan_files()? {
@@ -214,17 +225,15 @@ fn find_pointer_files(
             .strip_prefix(repo_root)
             .unwrap_or(&file_path);
 
-        let relative_str = relative.to_string_lossy();
-
         // Apply include/exclude filters
         if let Some(ref pattern) = include_pattern {
-            if !pattern.matches(&relative_str) {
+            if !pattern.is_match(relative) {
                 continue;
             }
         }
 
         if let Some(ref pattern) = exclude_pattern {
-            if pattern.matches(&relative_str) {
+            if pattern.is_match(relative) {
                 continue;
             }
         }
@@ -232,6 +241,37 @@ fn find_pointer_files(
         // Check if it's a pointer file
         if let Ok(pointer) = Pointer::parse(&file_path) {
             pointers.push((file_path, pointer));
+        }
+    }
+
+    Ok(pointers)
+}
+
+/// Find pointer files that changed during a merge (for post-merge hook).
+/// Uses ORIG_HEAD (set by git before merges) to diff against HEAD.
+fn find_post_merge_pointer_files(
+    repo_root: &Path,
+    scanner: &Scanner,
+) -> Result<Vec<(std::path::PathBuf, Pointer)>, Box<dyn std::error::Error>> {
+    let output = std::process::Command::new("git")
+        .args(["diff-tree", "-r", "--name-only", "ORIG_HEAD", "HEAD"])
+        .current_dir(repo_root)
+        .output()?;
+
+    let mut pointers = Vec::new();
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let path = Path::new(line);
+            if scanner.is_lfs_file(path) {
+                let full_path = repo_root.join(path);
+                if full_path.exists() {
+                    if let Ok(pointer) = Pointer::parse(&full_path) {
+                        pointers.push((full_path, pointer));
+                    }
+                }
+            }
         }
     }
 

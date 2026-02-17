@@ -36,7 +36,7 @@ fn post_checkout_hook(gg_path: &str) -> String {
 
 fn post_merge_hook(gg_path: &str) -> String {
     format!(
-        "#!/bin/sh\n# gg-lfs post-merge hook\n# Automatically pull LFS files after merge\n\nexec {} lfs pull\n",
+        "#!/bin/sh\n# gg-lfs post-merge hook\n# Automatically pull LFS files after merge\n\nexec {} lfs pull --post-merge\n",
         gg_path
     )
 }
@@ -184,10 +184,12 @@ pub fn register_filter_driver(repo_root: &Path) -> Result<(), Box<dyn std::error
 
     let clean_cmd = format!("{} lfs clean %f", gg_path);
     let smudge_cmd = format!("{} lfs smudge %f", gg_path);
+    let process_cmd = format!("{} lfs filter-process", gg_path);
 
     let configs = [
         ("filter.gg-lfs.clean", clean_cmd.as_str()),
         ("filter.gg-lfs.smudge", smudge_cmd.as_str()),
+        ("filter.gg-lfs.process", process_cmd.as_str()),
         ("filter.gg-lfs.required", "true"),
     ];
 
@@ -201,24 +203,35 @@ pub fn register_filter_driver(repo_root: &Path) -> Result<(), Box<dyn std::error
         }
     }
 
-    println!("{} filter driver (clean/smudge)", "Registered:".green());
+    println!("{} filter driver (clean/smudge/process)", "Registered:".green());
     Ok(())
 }
 
 /// Remove the gg lfs filter driver from git config
 pub fn unregister_filter_driver(repo_root: &Path) {
-    let keys = [
-        "filter.gg-lfs.clean", "filter.gg-lfs.smudge", "filter.gg-lfs.required",
-        // Also clean up old filter.lfs keys if they were ours
-        "filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.required",
-    ];
-
-    for key in keys {
-        // Ignore errors — key may not exist
+    // Always remove our gg-lfs keys
+    for key in ["filter.gg-lfs.clean", "filter.gg-lfs.smudge", "filter.gg-lfs.required", "filter.gg-lfs.process"] {
         let _ = Command::new("git")
             .args(["config", "--unset", key])
             .current_dir(repo_root)
             .status();
+    }
+
+    // Only remove old filter.lfs keys if they point to our command
+    for key in ["filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.required"] {
+        let output = Command::new("git")
+            .args(["config", key])
+            .current_dir(repo_root)
+            .output();
+        if let Ok(output) = output {
+            let value = String::from_utf8_lossy(&output.stdout);
+            if value.contains("gg lfs") {
+                let _ = Command::new("git")
+                    .args(["config", "--unset", key])
+                    .current_dir(repo_root)
+                    .status();
+            }
+        }
     }
 
     println!("{} filter driver", "Removed:".green());

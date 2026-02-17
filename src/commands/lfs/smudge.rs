@@ -6,10 +6,11 @@
 //! Reads pointer text from stdin, outputs real file content to stdout.
 //! Checks local cache first, falls back to S3 download on cache miss.
 
+use crate::lfs::pointer::MAX_POINTER_SIZE;
 use crate::lfs::storage;
 use crate::lfs::{Cache, LfsConfig, Pointer};
 use clap::Args;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 
 #[derive(Args, Debug)]
 pub struct SmudgeArgs {
@@ -35,27 +36,39 @@ fn run_inner(args: SmudgeArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Read all content from stdin
-    let mut content = Vec::new();
-    io::stdin().read_to_end(&mut content)?;
+    // Read header to determine if this is a pointer (bounded read to avoid OOM)
+    let mut header = vec![0u8; MAX_POINTER_SIZE + 1];
+    let header_len = read_exact_or_eof(&mut io::stdin().lock(), &mut header)?;
+    header.truncate(header_len);
 
-    // Try to parse as pointer — if not a pointer, pass through unchanged
-    let pointer = match Pointer::parse_content(BufReader::new(content.as_slice())) {
-        Ok(p) => p,
-        Err(_) => {
-            // Not a pointer, pass through as-is
-            io::stdout().write_all(&content)?;
-            io::stdout().flush()?;
-            return Ok(());
+    // Try parsing as pointer — only possible if content fits in header
+    if header_len <= MAX_POINTER_SIZE {
+        if let Ok(pointer) = Pointer::parse_content(io::BufReader::new(header.as_slice())) {
+            // It's a pointer — download the real content
+            return download_and_output(&pointer, &args, &header);
         }
-    };
+    }
 
+    // Not a pointer — stream through unchanged
+    io::stdout().write_all(&header)?;
+    io::copy(&mut io::stdin().lock(), &mut io::stdout())?;
+    io::stdout().flush()?;
+    Ok(())
+}
+
+/// Download the real content for a pointer and write to stdout
+fn download_and_output(
+    pointer: &Pointer,
+    args: &SmudgeArgs,
+    pointer_bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
     let oid = pointer.sha256().to_string();
 
-    // Check local cache first
+    // Check local cache first — stream directly to stdout
     if let Ok(cache) = Cache::new() {
-        if let Ok(data) = cache.read(&oid) {
-            io::stdout().write_all(&data)?;
+        if let Some(cached_path) = cache.get(&oid) {
+            let mut file = std::fs::File::open(&cached_path)?;
+            io::copy(&mut file, &mut io::stdout())?;
             io::stdout().flush()?;
             return Ok(());
         }
@@ -67,12 +80,11 @@ fn run_inner(args: SmudgeArgs) -> Result<(), Box<dyn std::error::Error>> {
     let repo = match git2::Repository::discover(".") {
         Ok(r) => r,
         Err(_) => {
-            // Can't find repo, output pointer as-is (graceful degradation)
             eprintln!(
                 "gg lfs smudge: warning: cannot find repository for {}, outputting pointer",
                 file_hint
             );
-            io::stdout().write_all(&content)?;
+            io::stdout().write_all(pointer_bytes)?;
             io::stdout().flush()?;
             return Ok(());
         }
@@ -85,7 +97,7 @@ fn run_inner(args: SmudgeArgs) -> Result<(), Box<dyn std::error::Error>> {
                 "gg lfs smudge: warning: bare repository, outputting pointer for {}",
                 file_hint
             );
-            io::stdout().write_all(&content)?;
+            io::stdout().write_all(pointer_bytes)?;
             io::stdout().flush()?;
             return Ok(());
         }
@@ -98,7 +110,7 @@ fn run_inner(args: SmudgeArgs) -> Result<(), Box<dyn std::error::Error>> {
                 "gg lfs smudge: warning: no LFS config, outputting pointer for {}",
                 file_hint
             );
-            io::stdout().write_all(&content)?;
+            io::stdout().write_all(pointer_bytes)?;
             io::stdout().flush()?;
             return Ok(());
         }
@@ -125,35 +137,46 @@ fn run_inner(args: SmudgeArgs) -> Result<(), Box<dyn std::error::Error>> {
             return Err(err);
         }
 
-        // Read the downloaded content
-        let data = std::fs::read(&temp_path)?;
-
-        // Cache it
+        // Cache the downloaded file
         if let Ok(cache) = Cache::new() {
-            let _ = cache.put(&oid, &data);
+            let _ = cache.put_file(&oid, &temp_path);
         }
+
+        // Stream temp file to stdout instead of reading into memory
+        let mut file = std::fs::File::open(&temp_path)?;
+        io::copy(&mut file, &mut io::stdout())?;
+        io::stdout().flush()?;
 
         // Clean up temp file
         std::fs::remove_file(&temp_path).ok();
 
-        Ok::<Vec<u8>, Box<dyn std::error::Error>>(data)
+        Ok::<(), Box<dyn std::error::Error>>(())
     });
 
-    match result {
-        Ok(data) => {
-            io::stdout().write_all(&data)?;
-            io::stdout().flush()?;
-        }
-        Err(e) => {
-            // Graceful degradation: output the pointer content + warning
-            eprintln!(
-                "gg lfs smudge: warning: download failed for {}: {}",
-                file_hint, e
-            );
-            io::stdout().write_all(&content)?;
-            io::stdout().flush()?;
-        }
+    if let Err(e) = result {
+        // Graceful degradation: output the pointer content + warning
+        eprintln!(
+            "gg lfs smudge: warning: download failed for {}: {}",
+            file_hint, e
+        );
+        io::stdout().write_all(pointer_bytes)?;
+        io::stdout().flush()?;
     }
 
     Ok(())
+}
+
+/// Read up to `buf.len()` bytes, returning the actual number read.
+/// Unlike `read_exact`, does not error on EOF.
+fn read_exact_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> io::Result<usize> {
+    let mut total = 0;
+    while total < buf.len() {
+        match reader.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total)
 }

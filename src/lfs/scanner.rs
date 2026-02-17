@@ -2,7 +2,7 @@
 //!
 //! Scans the repository for files matching LFS patterns defined in .gitattributes
 
-use glob::Pattern;
+use globset::Glob;
 use ignore::WalkBuilder;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
@@ -27,14 +27,15 @@ pub struct LfsPattern {
     /// The glob pattern
     pub pattern: String,
     /// The compiled pattern for matching
-    compiled: Pattern,
+    compiled: globset::GlobMatcher,
 }
 
 impl LfsPattern {
     /// Create a new LFS pattern
     pub fn new(pattern: &str) -> Result<Self, ScannerError> {
-        let compiled = Pattern::new(pattern)
-            .map_err(|e| ScannerError::InvalidPattern(format!("{}: {}", pattern, e)))?;
+        let compiled = Glob::new(pattern)
+            .map_err(|e| ScannerError::InvalidPattern(format!("{}: {}", pattern, e)))?
+            .compile_matcher();
 
         Ok(Self {
             pattern: pattern.to_string(),
@@ -44,9 +45,8 @@ impl LfsPattern {
 
     /// Check if a path matches this pattern
     pub fn matches(&self, path: &Path) -> bool {
-        let path_str = path.to_string_lossy();
-        self.compiled.matches(&path_str)
-            || self.compiled.matches(path.file_name().unwrap_or_default().to_string_lossy().as_ref())
+        self.compiled.is_match(path)
+            || self.compiled.is_match(path.file_name().unwrap_or_default())
     }
 }
 

@@ -43,6 +43,39 @@ fn run_inner(args: TrackArgs) -> Result<(), Box<dyn std::error::Error>> {
         "with LFS".green()
     );
 
+    // Check if filter driver is registered
+    let filter_check = std::process::Command::new("git")
+        .args(["config", "filter.gg-lfs.clean"])
+        .current_dir(repo_root)
+        .output()?;
+    if !filter_check.status.success() || filter_check.stdout.is_empty() {
+        println!(
+            "{}",
+            "Warning: LFS filter driver not installed. Run 'gg lfs install' first.".yellow()
+        );
+    }
+
+    // Warn about already-committed files that aren't going through LFS
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "--", &args.pattern])
+        .current_dir(repo_root)
+        .output()?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let count = stdout.lines().filter(|l| !l.is_empty()).count();
+        if count > 0 {
+            println!(
+                "{}",
+                format!(
+                    "Warning: {} file(s) matching \"{}\" already committed without LFS.\n  \
+                     Run 'gg lfs import' to convert them, or use 'git rm --cached' and re-add.",
+                    count, args.pattern
+                )
+                .yellow()
+            );
+        }
+    }
+
     // Stage .gitattributes
     let gitattributes = repo_root.join(".gitattributes");
     if gitattributes.exists() {

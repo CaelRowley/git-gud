@@ -195,27 +195,26 @@ fn find_matching_files(
 ) -> Result<Vec<std::path::PathBuf>, Box<dyn std::error::Error>> {
     let include_pattern = include
         .as_ref()
-        .map(|p| glob::Pattern::new(p))
+        .map(|p| globset::Glob::new(p).map(|g| g.compile_matcher()))
         .transpose()?;
     let exclude_pattern = exclude
         .as_ref()
-        .map(|p| glob::Pattern::new(p))
+        .map(|p| globset::Glob::new(p).map(|g| g.compile_matcher()))
         .transpose()?;
 
     let mut files = Vec::new();
 
     for file_path in scanner.scan_files()? {
         let relative = file_path.strip_prefix(repo_root).unwrap_or(&file_path);
-        let relative_str = relative.to_string_lossy();
 
         if let Some(ref pattern) = include_pattern {
-            if !pattern.matches(&relative_str) {
+            if !pattern.is_match(relative) {
                 continue;
             }
         }
 
         if let Some(ref pattern) = exclude_pattern {
-            if pattern.matches(&relative_str) {
+            if pattern.is_match(relative) {
                 continue;
             }
         }

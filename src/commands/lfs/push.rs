@@ -114,14 +114,13 @@ async fn run_inner(args: PushArgs) -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if storage.exists(oid).await? {
-                    replace_with_pointer(file_path, &pointer, &cache)?;
+                    cache.put_file(oid, file_path)?;
                     skipped += 1;
                 } else {
                     match storage.upload(oid, file_path).await {
                         Ok(_) => {
                             uploaded += 1;
                             cache.put_file(oid, file_path)?;
-                            replace_with_pointer(file_path, &pointer, &cache)?;
                         }
                         Err(e) => {
                             if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e)); }
@@ -241,12 +240,3 @@ fn get_staged_lfs_files(
     Ok(files)
 }
 
-/// Replace a file with its pointer
-fn replace_with_pointer(
-    file_path: &Path,
-    pointer: &Pointer,
-    _cache: &Cache,
-) -> Result<(), Box<dyn std::error::Error>> {
-    pointer.write(file_path)?;
-    Ok(())
-}
