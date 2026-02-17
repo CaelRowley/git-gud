@@ -169,7 +169,44 @@ bucket = "my-lfs-bucket"
 region = "us-east-1"
 # prefix = "project-name/"      # Optional prefix
 # endpoint = "https://..."      # For S3-compatible services
+
+[storage.credentials]
+access_key_id = "AKIA..."
+secret_access_key = "..."
 ```
+
+**AWS Setup:**
+
+1. **Create an S3 bucket** — Go to S3 in the AWS Console, create a bucket with a unique name (e.g. `my-project-lfs`), pick a region, and leave all other settings as defaults (block public access = on).
+
+2. **Create an IAM user** — Go to IAM → Users → Create user. Name it something like `gg-lfs`.
+
+3. **Create and attach a policy** — Create a custom policy with this JSON and attach it to the user:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "s3:ListBucket",
+           "s3:GetObject",
+           "s3:PutObject",
+           "s3:DeleteObject"
+         ],
+         "Resource": [
+           "arn:aws:s3:::my-project-lfs",
+           "arn:aws:s3:::my-project-lfs/*"
+         ]
+       }
+     ]
+   }
+   ```
+   Replace `my-project-lfs` with your actual bucket name.
+
+4. **Create access keys** — Go to the user → Security credentials → Create access key → Choose "Command Line Interface". Save the Access Key ID and Secret Access Key.
+
+5. **Configure gg lfs** — Run `gg lfs install`, then edit `.gg/lfs.toml` with your bucket name, region, and credentials. Verify with `gg lfs verify --write`.
 
 **Push/Pull flags:**
 
