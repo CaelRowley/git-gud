@@ -289,4 +289,115 @@ mod tests {
         assert_eq!(cache.count().unwrap(), 2);
         assert_eq!(cache.size().unwrap(), 11); // 5 + 6 bytes
     }
+
+    #[test]
+    fn test_cache_put_file() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path().join("cache")).unwrap();
+
+        // Write a source file
+        let source = temp.path().join("source.bin");
+        fs::write(&source, b"file content here").unwrap();
+
+        let oid = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab";
+        let cached_path = cache.put_file(oid, &source).unwrap();
+
+        assert!(cached_path.exists());
+        assert!(cache.contains(oid));
+        assert_eq!(cache.read(oid).unwrap(), b"file content here");
+    }
+
+    #[test]
+    fn test_cache_copy_to() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path().join("cache")).unwrap();
+
+        let oid = "abc123";
+        cache.put(oid, b"cached data").unwrap();
+
+        let dest = temp.path().join("restored.bin");
+        let bytes = cache.copy_to(oid, &dest).unwrap();
+
+        assert_eq!(bytes, 11);
+        assert_eq!(fs::read(&dest).unwrap(), b"cached data");
+    }
+
+    #[test]
+    fn test_cache_copy_to_not_found() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path()).unwrap();
+
+        let dest = temp.path().join("out.bin");
+        let result = cache.copy_to("nonexistent", &dest);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_clear() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path()).unwrap();
+
+        cache.put("oid1", b"one").unwrap();
+        cache.put("oid2", b"two").unwrap();
+        cache.put("oid3", b"three").unwrap();
+
+        assert_eq!(cache.count().unwrap(), 3);
+
+        let cleared = cache.clear().unwrap();
+        assert_eq!(cleared, 3);
+        assert_eq!(cache.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_cache_clear_empty() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path()).unwrap();
+
+        let cleared = cache.clear().unwrap();
+        assert_eq!(cleared, 0);
+    }
+
+    #[test]
+    fn test_cache_prune_keeps_recent() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path()).unwrap();
+
+        cache.put("oid1", b"recent").unwrap();
+
+        // Pruning with 30 days should keep a just-created file
+        let pruned = cache.prune(30).unwrap();
+        assert_eq!(pruned, 0);
+        assert!(cache.contains("oid1"));
+    }
+
+    #[test]
+    fn test_cache_read_not_found() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path()).unwrap();
+
+        let result = cache.read("nonexistent");
+        assert!(matches!(result, Err(CacheError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_cache_remove_nonexistent() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path()).unwrap();
+
+        let removed = cache.remove("nonexistent").unwrap();
+        assert!(!removed);
+    }
+
+    #[test]
+    fn test_cache_overwrite_existing() {
+        let temp = TempDir::new().unwrap();
+        let cache = Cache::with_root(temp.path()).unwrap();
+
+        let oid = "abc123";
+        cache.put(oid, b"first").unwrap();
+        cache.put(oid, b"second").unwrap();
+
+        assert_eq!(cache.read(oid).unwrap(), b"second");
+        assert_eq!(cache.count().unwrap(), 1);
+    }
 }

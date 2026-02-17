@@ -266,4 +266,138 @@ mod tests {
             "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393"
         );
     }
+
+    #[test]
+    fn test_pointer_parse_missing_version() {
+        let content = "oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 100\n";
+        let reader = Cursor::new(content);
+        let result = Pointer::parse_content(reader);
+        assert!(matches!(result, Err(PointerError::MissingField(_))));
+    }
+
+    #[test]
+    fn test_pointer_parse_missing_oid() {
+        let content = "version https://git-lfs.github.com/spec/v1\nsize 100\n";
+        let reader = Cursor::new(content);
+        let result = Pointer::parse_content(reader);
+        assert!(matches!(result, Err(PointerError::MissingField(_))));
+    }
+
+    #[test]
+    fn test_pointer_parse_missing_size() {
+        let content = "version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n";
+        let reader = Cursor::new(content);
+        let result = Pointer::parse_content(reader);
+        assert!(matches!(result, Err(PointerError::MissingField(_))));
+    }
+
+    #[test]
+    fn test_pointer_parse_empty_input() {
+        let content = "";
+        let reader = Cursor::new(content);
+        let result = Pointer::parse_content(reader);
+        assert!(matches!(result, Err(PointerError::MissingField(_))));
+    }
+
+    #[test]
+    fn test_pointer_parse_ignores_unknown_keys() {
+        let content = "version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 100\nextension some-extension\n";
+        let reader = Cursor::new(content);
+        let pointer = Pointer::parse_content(reader).unwrap();
+        assert_eq!(pointer.size, 100);
+    }
+
+    #[test]
+    fn test_pointer_parse_invalid_oid_short_hex() {
+        let content = "version https://git-lfs.github.com/spec/v1\noid sha256:abcdef\nsize 100\n";
+        let reader = Cursor::new(content);
+        let result = Pointer::parse_content(reader);
+        assert!(matches!(result, Err(PointerError::InvalidOid(_))));
+    }
+
+    #[test]
+    fn test_pointer_parse_invalid_size() {
+        let content = "version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize notanumber\n";
+        let reader = Cursor::new(content);
+        let result = Pointer::parse_content(reader);
+        assert!(matches!(result, Err(PointerError::InvalidFormat(_))));
+    }
+
+    #[test]
+    fn test_pointer_write_and_parse_roundtrip() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let file_path = temp.path().join("test.bin");
+
+        // Create a pointer and write it
+        let original = Pointer {
+            version: LFS_VERSION.to_string(),
+            oid: "sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393"
+                .to_string(),
+            size: 12345,
+        };
+        original.write(&file_path).unwrap();
+
+        // Parse it back
+        let parsed = Pointer::parse(&file_path).unwrap();
+        assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn test_pointer_from_file_and_write_roundtrip() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let real_file = temp.path().join("data.bin");
+        let pointer_file = temp.path().join("data.ptr");
+
+        // Write real content
+        std::fs::write(&real_file, b"some binary content\x00\x01").unwrap();
+
+        // Create pointer from file, write it, parse it back
+        let pointer = Pointer::from_file(&real_file).unwrap();
+        pointer.write(&pointer_file).unwrap();
+        let parsed = Pointer::parse(&pointer_file).unwrap();
+
+        assert_eq!(pointer, parsed);
+    }
+
+    #[test]
+    fn test_is_pointer_file_with_pointer() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("ptr");
+        let pointer = Pointer::from_bytes(b"test content");
+        pointer.write(&path).unwrap();
+
+        assert!(Pointer::is_pointer_file(&path));
+    }
+
+    #[test]
+    fn test_is_pointer_file_with_real_content() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("real");
+        std::fs::write(&path, b"this is not a pointer file").unwrap();
+
+        assert!(!Pointer::is_pointer_file(&path));
+    }
+
+    #[test]
+    fn test_is_pointer_file_nonexistent() {
+        assert!(!Pointer::is_pointer_file("/tmp/does_not_exist_gg_test"));
+    }
+
+    #[test]
+    fn test_is_pointer_file_too_large() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("large");
+        let content = vec![b'x'; MAX_POINTER_SIZE + 1];
+        std::fs::write(&path, &content).unwrap();
+
+        assert!(!Pointer::is_pointer_file(&path));
+    }
+
+    #[test]
+    fn test_pointer_parse_blank_lines_ignored() {
+        let content = "\nversion https://git-lfs.github.com/spec/v1\n\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n\nsize 100\n\n";
+        let reader = Cursor::new(content);
+        let pointer = Pointer::parse_content(reader).unwrap();
+        assert_eq!(pointer.size, 100);
+    }
 }

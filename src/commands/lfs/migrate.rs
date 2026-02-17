@@ -274,6 +274,7 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
         println!("\n{}", "Removing git-lfs hooks...".cyan());
         let status = Command::new("git")
             .args(["lfs", "uninstall"])
+            .current_dir(repo_root)
             .status();
         match status {
             Ok(s) if s.success() => println!("  {} git-lfs hooks", "Removed:".green()),
@@ -281,6 +282,15 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
                 "  {} Could not uninstall git-lfs (you can do this manually)",
                 "Warning:".yellow()
             ),
+        }
+
+        // Re-register gg's filter driver (git lfs uninstall nukes filter.lfs.*)
+        if let Err(e) = super::install::register_filter_driver(repo_root) {
+            eprintln!(
+                "  {} Could not re-register filter driver: {}",
+                "Warning:".yellow(),
+                e
+            );
         }
     } else if args.dry_run && !args.keep_gitlfs {
         println!(
@@ -366,8 +376,79 @@ async fn create_storage(
         region: config.storage.region.clone(),
         prefix: config.storage.prefix.clone(),
         endpoint: config.storage.endpoint.clone(),
+        credentials: config.storage.credentials.as_ref().map(|c| {
+            crate::lfs::storage::s3::S3Credentials {
+                access_key_id: c.access_key_id.clone(),
+                secret_access_key: c.secret_access_key.clone(),
+            }
+        }),
     };
 
     let storage = S3Storage::new(s3_config).await?;
     Ok(Box::new(storage))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_find_gitlfs_object_found() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let lfs_dir = temp.path();
+
+        let oid = "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393";
+        // git-lfs layout: objects/{oid[0..2]}/{oid[2..4]}/{oid}
+        let object_dir = lfs_dir.join(&oid[..2]).join(&oid[2..4]);
+        fs::create_dir_all(&object_dir).unwrap();
+        fs::write(object_dir.join(oid), b"fake lfs content").unwrap();
+
+        let result = find_gitlfs_object(lfs_dir, oid);
+        assert!(result.is_some());
+        assert!(result.unwrap().exists());
+    }
+
+    #[test]
+    fn test_find_gitlfs_object_not_found() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let result = find_gitlfs_object(
+            temp.path(),
+            "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393",
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_gitlfs_object_short_oid() {
+        let temp = tempfile::TempDir::new().unwrap();
+        assert!(find_gitlfs_object(temp.path(), "ab").is_none());
+        assert!(find_gitlfs_object(temp.path(), "abc").is_none());
+        assert!(find_gitlfs_object(temp.path(), "").is_none());
+    }
+
+    #[test]
+    fn test_cache_from_gitlfs_copies_to_cache() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let lfs_dir = temp.path().join("lfs");
+        let cache = crate::lfs::Cache::with_root(temp.path().join("cache")).unwrap();
+
+        let oid = "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393";
+        let object_dir = lfs_dir.join(&oid[..2]).join(&oid[2..4]);
+        fs::create_dir_all(&object_dir).unwrap();
+        fs::write(object_dir.join(oid), b"lfs object data").unwrap();
+
+        cache_from_gitlfs(&lfs_dir, oid, &cache);
+        assert!(cache.contains(oid));
+        assert_eq!(cache.read(oid).unwrap(), b"lfs object data");
+    }
+
+    #[test]
+    fn test_cache_from_gitlfs_missing_object_is_noop() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let cache = crate::lfs::Cache::with_root(temp.path().join("cache")).unwrap();
+
+        cache_from_gitlfs(temp.path(), "nonexistent_oid_that_wont_be_found", &cache);
+        assert_eq!(cache.count().unwrap(), 0);
+    }
 }

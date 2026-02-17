@@ -2,22 +2,26 @@
 //!
 //! Provides commands for managing large file storage.
 
+pub mod clean;
 pub mod import;
 pub mod install;
 pub mod migrate;
 pub mod pull;
 pub mod push;
+pub mod smudge;
 pub mod status;
 pub mod track;
 pub mod verify;
 
 use clap::{Args, Subcommand};
 
+pub use clean::CleanArgs;
 pub use import::ImportArgs;
 pub use install::{InstallArgs, UninstallArgs};
 pub use migrate::MigrateArgs;
 pub use pull::PullArgs;
 pub use push::PushArgs;
+pub use smudge::SmudgeArgs;
 pub use status::StatusArgs;
 pub use track::{TrackArgs, UntrackArgs};
 pub use verify::VerifyArgs;
@@ -61,6 +65,12 @@ pub enum LfsCommand {
 
     /// Verify S3 configuration and connectivity
     Verify(VerifyArgs),
+
+    /// Clean filter (used by git internally — converts file content to pointer)
+    Clean(CleanArgs),
+
+    /// Smudge filter (used by git internally — converts pointer to file content)
+    Smudge(SmudgeArgs),
 }
 
 /// Run the LFS command
@@ -76,5 +86,7 @@ pub fn run(args: LfsArgs) -> i32 {
         LfsCommand::Pull(args) => pull::run(args),
         LfsCommand::Status(args) => status::run(args),
         LfsCommand::Verify(args) => verify::run(args),
+        LfsCommand::Clean(args) => clean::run(args),
+        LfsCommand::Smudge(args) => smudge::run(args),
     }
 }

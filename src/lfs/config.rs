@@ -43,6 +43,13 @@ impl Default for StorageProvider {
     }
 }
 
+/// Inline credential configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialsConfig {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+}
+
 /// Storage configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
@@ -64,6 +71,10 @@ pub struct StorageConfig {
     /// Optional custom endpoint (for S3-compatible services like MinIO)
     #[serde(default)]
     pub endpoint: Option<String>,
+
+    /// Optional inline credentials (alternative to env vars / ~/.aws/credentials)
+    #[serde(default)]
+    pub credentials: Option<CredentialsConfig>,
 }
 
 fn default_region() -> String {
@@ -138,6 +149,7 @@ impl LfsConfig {
                 region: "us-east-1".to_string(),
                 prefix: Some("lfs/".to_string()),
                 endpoint: None,
+                credentials: None,
             },
         }
     }
@@ -163,11 +175,10 @@ region = "us-east-1"
 # Optional custom endpoint for S3-compatible services (MinIO, DigitalOcean Spaces, etc.)
 # endpoint = "https://nyc3.digitaloceanspaces.com"
 
-# Credentials are read from environment variables:
-#   AWS_ACCESS_KEY_ID
-#   AWS_SECRET_ACCESS_KEY
-# Or from ~/.aws/credentials (AWS CLI configuration)
-# Or from IAM roles when running on AWS infrastructure
+# Credentials (optional - can also use env vars or ~/.aws/credentials)
+# [storage.credentials]
+# access_key_id = "AKIA..."
+# secret_access_key = "..."
 "#
         .to_string()
     }

@@ -200,5 +200,16 @@ async fn build_aws_config(config: &LfsConfig) -> aws_config::SdkConfig {
         builder = builder.endpoint_url(endpoint);
     }
 
+    if let Some(creds) = &config.storage.credentials {
+        let credentials = aws_sdk_s3::config::Credentials::new(
+            &creds.access_key_id,
+            &creds.secret_access_key,
+            None,
+            None,
+            "gg-lfs-config",
+        );
+        builder = builder.credentials_provider(credentials);
+    }
+
     builder.load().await
 }

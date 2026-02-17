@@ -8,6 +8,13 @@ use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
+/// Inline credentials for S3
+#[derive(Debug, Clone)]
+pub struct S3Credentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+}
+
 /// S3 storage configuration
 #[derive(Debug, Clone)]
 pub struct S3Config {
@@ -19,6 +26,8 @@ pub struct S3Config {
     pub prefix: Option<String>,
     /// Optional custom endpoint (for S3-compatible services)
     pub endpoint: Option<String>,
+    /// Optional inline credentials
+    pub credentials: Option<S3Credentials>,
 }
 
 /// AWS S3 storage backend
@@ -39,6 +48,18 @@ impl S3Storage {
         // Set custom endpoint if provided
         if let Some(endpoint) = &config.endpoint {
             aws_config_builder = aws_config_builder.endpoint_url(endpoint);
+        }
+
+        // Use inline credentials if provided
+        if let Some(creds) = &config.credentials {
+            let credentials = aws_sdk_s3::config::Credentials::new(
+                &creds.access_key_id,
+                &creds.secret_access_key,
+                None,
+                None,
+                "gg-lfs-config",
+            );
+            aws_config_builder = aws_config_builder.credentials_provider(credentials);
         }
 
         let aws_config = aws_config_builder.load().await;

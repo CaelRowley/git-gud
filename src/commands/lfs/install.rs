@@ -6,6 +6,7 @@ use colored::Colorize;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::process::Command;
 
 #[derive(Args, Debug)]
 pub struct InstallArgs {
@@ -110,6 +111,9 @@ fn run_inner(args: InstallArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Add .gg/ to .gitignore if not already there
     add_to_gitignore(repo_root)?;
 
+    // Register filter driver in git config
+    register_filter_driver(repo_root)?;
+
     println!("{}", "LFS hooks installed successfully!".green().bold());
     Ok(())
 }
@@ -153,8 +157,48 @@ fn run_uninstall_inner() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Remove filter driver from git config
+    unregister_filter_driver(repo_root);
+
     println!("{}", "LFS hooks uninstalled.".green().bold());
     Ok(())
+}
+
+/// Register the gg lfs filter driver in git config
+pub fn register_filter_driver(repo_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let configs = [
+        ("filter.lfs.clean", "gg lfs clean %f"),
+        ("filter.lfs.smudge", "gg lfs smudge %f"),
+        ("filter.lfs.required", "true"),
+    ];
+
+    for (key, value) in configs {
+        let status = Command::new("git")
+            .args(["config", key, value])
+            .current_dir(repo_root)
+            .status()?;
+        if !status.success() {
+            return Err(format!("Failed to set {}", key).into());
+        }
+    }
+
+    println!("{} filter driver (clean/smudge)", "Registered:".green());
+    Ok(())
+}
+
+/// Remove the gg lfs filter driver from git config
+pub fn unregister_filter_driver(repo_root: &Path) {
+    let keys = ["filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.required"];
+
+    for key in keys {
+        // Ignore errors — key may not exist
+        let _ = Command::new("git")
+            .args(["config", "--unset", key])
+            .current_dir(repo_root)
+            .status();
+    }
+
+    println!("{} filter driver", "Removed:".green());
 }
 
 /// Add .gg/ to .gitignore

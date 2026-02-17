@@ -611,6 +611,366 @@ fn lfs_migrate_keep_gitlfs_flag() {
 }
 
 // ============================================
+// LFS Clean Filter Tests
+// ============================================
+
+/// Helper: run `gg lfs clean` with piped stdin in a given directory
+fn run_gg_clean(dir: &std::path::Path, stdin_data: &[u8]) -> (i32, Vec<u8>, String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gg"))
+        .args(["lfs", "clean", "test.bin"])
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn gg lfs clean");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin_data)
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    let code = output.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    (code, output.stdout, stderr)
+}
+
+/// Helper: run `gg lfs smudge` with piped stdin in a given directory
+fn run_gg_smudge(dir: &std::path::Path, stdin_data: &[u8]) -> (i32, Vec<u8>, String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gg"))
+        .args(["lfs", "smudge", "test.bin"])
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn gg lfs smudge");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin_data)
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    let code = output.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    (code, output.stdout, stderr)
+}
+
+#[test]
+fn lfs_clean_produces_pointer() {
+    let repo = TempRepo::new();
+    let content = b"This is some binary content for LFS testing.\x00\x01\x02\x03";
+
+    let (code, stdout, _) = run_gg_clean(&repo.path, content);
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8_lossy(&stdout);
+    assert!(
+        output.contains("version https://git-lfs.github.com/spec/v1"),
+        "Expected LFS pointer version line, got: {}",
+        output
+    );
+    assert!(output.contains("oid sha256:"));
+    assert!(output.contains(&format!("size {}", content.len())));
+}
+
+#[test]
+fn lfs_clean_passthrough_pointer() {
+    let repo = TempRepo::new();
+
+    // Create a valid pointer
+    let pointer = "version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n";
+
+    let (code, stdout, _) = run_gg_clean(&repo.path, pointer.as_bytes());
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8_lossy(&stdout);
+    assert_eq!(output.as_ref(), pointer, "Pointer should pass through unchanged");
+}
+
+#[test]
+fn lfs_smudge_passthrough_non_pointer() {
+    let repo = TempRepo::new();
+    let content = b"This is not a pointer file at all.";
+
+    let (code, stdout, _) = run_gg_smudge(&repo.path, content);
+    assert_eq!(code, 0);
+    assert_eq!(&stdout, content, "Non-pointer content should pass through unchanged");
+}
+
+#[test]
+fn lfs_smudge_from_cache() {
+    let repo = TempRepo::new();
+    let content = b"Binary content that gets cleaned then smudged.\x00\xFF\xFE";
+
+    // Step 1: Clean the content (populates cache)
+    let (code, pointer_out, _) = run_gg_clean(&repo.path, content);
+    assert_eq!(code, 0);
+
+    // Step 2: Smudge the pointer (should restore from cache)
+    let (code, restored, _) = run_gg_smudge(&repo.path, &pointer_out);
+    assert_eq!(code, 0);
+    assert_eq!(
+        &restored, content,
+        "Smudge should restore original content from cache"
+    );
+}
+
+// ============================================
+// LFS Install/Uninstall Filter Driver Tests
+// ============================================
+
+#[test]
+fn lfs_install_registers_filter_driver() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+
+    let clean = repo.git_output(&["config", "filter.lfs.clean"]);
+    let smudge = repo.git_output(&["config", "filter.lfs.smudge"]);
+    let required = repo.git_output(&["config", "filter.lfs.required"]);
+
+    assert_eq!(clean, "gg lfs clean %f");
+    assert_eq!(smudge, "gg lfs smudge %f");
+    assert_eq!(required, "true");
+}
+
+#[test]
+fn lfs_uninstall_removes_filter_driver() {
+    let repo = TempRepo::new();
+
+    // Install first
+    repo.gg(&["lfs", "install"]);
+
+    // Verify it's set locally
+    let clean = repo.git_output(&["config", "--local", "filter.lfs.clean"]);
+    assert_eq!(clean, "gg lfs clean %f");
+
+    // Uninstall
+    repo.gg(&["lfs", "uninstall"]);
+
+    // Verify the local config no longer has it
+    let output = repo.run_git(&["config", "--local", "filter.lfs.clean"]);
+    assert!(
+        !output.status.success(),
+        "filter.lfs.clean should be unset in local config after uninstall"
+    );
+}
+
+// ============================================
+// LFS Filter Git Integration Test
+// ============================================
+
+#[test]
+fn lfs_filter_roundtrip_via_git() {
+    let repo = TempRepo::new();
+
+    // Install (registers hooks + filter driver)
+    let (code, _, _) = repo.gg(&["lfs", "install"]);
+    assert_eq!(code, 0);
+
+    // Track *.bin files
+    let (code, _, _) = repo.gg(&["lfs", "track", "*.bin"]);
+    assert_eq!(code, 0);
+
+    // Create a binary file
+    let content = b"Large binary content for roundtrip test\x00\x01\x02";
+    fs::write(repo.path.join("test.bin"), content).unwrap();
+
+    // Stage the file — this invokes the clean filter
+    repo.run_git(&["add", "test.bin"]);
+    repo.run_git(&["add", ".gitattributes"]);
+
+    // Check what's in the git index (should be a pointer)
+    let index_content = repo.git_output(&["show", ":test.bin"]);
+    assert!(
+        index_content.contains("version https://git-lfs.github.com/spec/v1"),
+        "Index should contain pointer, got: {}",
+        index_content
+    );
+    assert!(index_content.contains("oid sha256:"));
+    assert!(index_content.contains(&format!("size {}", content.len())));
+
+    // Working tree should still have the real content
+    let working_content = fs::read(repo.path.join("test.bin")).unwrap();
+    assert_eq!(
+        &working_content, content,
+        "Working tree should still have real content"
+    );
+}
+
+// ============================================
+// LFS Clean Filter Edge Case Tests
+// ============================================
+
+#[test]
+fn lfs_clean_empty_input() {
+    let repo = TempRepo::new();
+    let (code, stdout, _) = run_gg_clean(&repo.path, b"");
+    assert_eq!(code, 0);
+    // Empty input should produce a pointer (zero-size)
+    let output = String::from_utf8_lossy(&stdout);
+    assert!(output.contains("version https://git-lfs.github.com/spec/v1"));
+    assert!(output.contains("size 0"));
+}
+
+#[test]
+fn lfs_clean_deterministic_hash() {
+    let repo = TempRepo::new();
+    let content = b"deterministic content";
+
+    let (_, stdout1, _) = run_gg_clean(&repo.path, content);
+    let (_, stdout2, _) = run_gg_clean(&repo.path, content);
+
+    assert_eq!(stdout1, stdout2, "Same content should produce identical pointers");
+}
+
+#[test]
+fn lfs_clean_different_content_different_hash() {
+    let repo = TempRepo::new();
+
+    let (_, stdout1, _) = run_gg_clean(&repo.path, b"content A");
+    let (_, stdout2, _) = run_gg_clean(&repo.path, b"content B");
+
+    assert_ne!(stdout1, stdout2, "Different content should produce different pointers");
+}
+
+// ============================================
+// LFS Smudge Filter Edge Case Tests
+// ============================================
+
+#[test]
+fn lfs_smudge_empty_input() {
+    let repo = TempRepo::new();
+    let (code, stdout, _) = run_gg_smudge(&repo.path, b"");
+    assert_eq!(code, 0);
+    // Empty input is not a pointer, should pass through as-is
+    assert!(stdout.is_empty());
+}
+
+#[test]
+fn lfs_smudge_corrupted_pointer() {
+    let repo = TempRepo::new();
+    // Looks like a pointer but has invalid fields
+    let corrupted = b"version https://git-lfs.github.com/spec/v1\noid sha256:invalid\nsize abc\n";
+    let (code, stdout, _) = run_gg_smudge(&repo.path, corrupted);
+    assert_eq!(code, 0);
+    // Should pass through unchanged (parse failure = not a pointer)
+    assert_eq!(&stdout, corrupted);
+}
+
+#[test]
+fn lfs_smudge_partial_pointer() {
+    let repo = TempRepo::new();
+    // Missing size field
+    let partial = b"version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n";
+    let (code, stdout, _) = run_gg_smudge(&repo.path, partial);
+    assert_eq!(code, 0);
+    // Should pass through unchanged
+    assert_eq!(&stdout, partial);
+}
+
+#[test]
+fn lfs_smudge_cache_miss_no_config() {
+    let repo = TempRepo::new();
+    // Valid pointer but no LFS config and no cache entry
+    let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n";
+    let (code, stdout, stderr) = run_gg_smudge(&repo.path, pointer);
+    assert_eq!(code, 0);
+    // Should gracefully degrade: output pointer content + warning on stderr
+    let output = String::from_utf8_lossy(&stdout);
+    assert!(output.contains("version https://git-lfs.github.com/spec/v1"));
+    let stderr_str = String::from_utf8_lossy(stderr.as_bytes());
+    assert!(
+        stderr_str.contains("warning") || output.contains("version"),
+        "Should warn or pass through pointer on cache miss"
+    );
+}
+
+// ============================================
+// LFS Install Idempotency Tests
+// ============================================
+
+#[test]
+fn lfs_install_idempotent_runs_twice() {
+    let repo = TempRepo::new();
+
+    // Install once
+    let (code1, _, _) = repo.gg(&["lfs", "install"]);
+    assert_eq!(code1, 0);
+
+    // Install again — hooks are ours, should overwrite without error
+    let (code2, stdout2, _) = repo.gg(&["lfs", "install"]);
+    assert_eq!(code2, 0);
+    assert!(
+        stdout2.contains("Installed") || stdout2.contains("installed"),
+        "Second install should succeed and re-install our hooks"
+    );
+
+    // Hooks should still work
+    let hooks_dir = repo.path.join(".git").join("hooks");
+    let content = fs::read_to_string(hooks_dir.join("pre-push")).unwrap();
+    assert!(content.contains("gg-lfs"));
+}
+
+#[test]
+fn lfs_install_does_not_duplicate_gitignore() {
+    let repo = TempRepo::new();
+
+    repo.gg(&["lfs", "install"]);
+    repo.gg(&["lfs", "install"]);
+
+    let content = fs::read_to_string(repo.path.join(".gitignore")).unwrap();
+    let count = content.matches(".gg/").count();
+    assert_eq!(count, 1, ".gg/ should appear only once in .gitignore");
+}
+
+// ============================================
+// LFS Filter Full Roundtrip Test
+// ============================================
+
+#[test]
+fn lfs_filter_checkout_roundtrip() {
+    let repo = TempRepo::new();
+
+    // Install and track
+    repo.gg(&["lfs", "install"]);
+    repo.gg(&["lfs", "track", "*.bin"]);
+
+    // Create binary file, stage and commit
+    let content = b"Binary content for checkout roundtrip\x00\xFF";
+    fs::write(repo.path.join("test.bin"), content).unwrap();
+    repo.run_git(&["add", ".gitattributes", "test.bin"]);
+    repo.run_git(&["commit", "-m", "add binary file"]);
+
+    // Verify index has pointer
+    let index_content = repo.git_output(&["show", "HEAD:test.bin"]);
+    assert!(index_content.contains("version https://git-lfs.github.com/spec/v1"));
+
+    // Remove working copy and checkout again (triggers smudge)
+    fs::remove_file(repo.path.join("test.bin")).unwrap();
+    repo.run_git(&["checkout", "--", "test.bin"]);
+
+    // Working tree should have real content restored from cache
+    let restored = fs::read(repo.path.join("test.bin")).unwrap();
+    assert_eq!(
+        &restored, content,
+        "Checkout should restore original content via smudge filter"
+    );
+}
+
+// ============================================
 // CLI Tests
 // ============================================
 

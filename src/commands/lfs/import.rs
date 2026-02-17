@@ -188,6 +188,12 @@ async fn create_storage(
         region: config.storage.region.clone(),
         prefix: config.storage.prefix.clone(),
         endpoint: config.storage.endpoint.clone(),
+        credentials: config.storage.credentials.as_ref().map(|c| {
+            crate::lfs::storage::s3::S3Credentials {
+                access_key_id: c.access_key_id.clone(),
+                secret_access_key: c.secret_access_key.clone(),
+            }
+        }),
     };
 
     let storage = S3Storage::new(s3_config).await?;
