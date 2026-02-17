@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use std::path::Path;
 use thiserror::Error;
 
-pub use s3::{S3Config, S3Storage};
+pub use s3::{S3Config, S3Credentials, S3Storage};
 
 #[derive(Error, Debug)]
 #[allow(dead_code)]
@@ -74,4 +74,23 @@ pub trait Storage: Send + Sync {
 
     /// Get the storage provider name
     fn provider_name(&self) -> &str;
+}
+
+/// Create a storage backend from LFS config
+pub async fn create_storage(
+    config: &crate::lfs::LfsConfig,
+) -> Result<Box<dyn Storage>, StorageError> {
+    let s3_config = S3Config {
+        bucket: config.storage.bucket.clone(),
+        region: config.storage.region.clone(),
+        prefix: config.storage.prefix.clone(),
+        endpoint: config.storage.endpoint.clone(),
+        credentials: config.storage.credentials.as_ref().map(|c| S3Credentials {
+            access_key_id: c.access_key_id.clone(),
+            secret_access_key: c.secret_access_key.clone(),
+        }),
+    };
+
+    let storage = S3Storage::new(s3_config).await?;
+    Ok(Box::new(storage))
 }

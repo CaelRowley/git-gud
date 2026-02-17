@@ -4,10 +4,12 @@
 //! uploading the real content to S3. Use this for initial setup
 //! when adopting gg lfs on a repo that has never used any LFS system.
 
-use crate::lfs::storage::{S3Config, S3Storage, Storage};
+use crate::lfs::storage;
 use crate::lfs::{Cache, LfsConfig, Pointer, Scanner};
 use clap::Args;
 use colored::Colorize;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::io::IsTerminal;
 use std::path::Path;
 
 #[derive(Args, Debug)]
@@ -65,7 +67,7 @@ async fn run_inner(args: ImportArgs) -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // Initialize storage
-    let storage = create_storage(&config).await?;
+    let storage = storage::create_storage(&config).await?;
 
     // Initialize cache
     let cache = Cache::new()?;
@@ -90,6 +92,17 @@ async fn run_inner(args: ImportArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let show_progress = !args.dry_run && std::io::stderr().is_terminal();
+    let pb = if show_progress {
+        let pb = ProgressBar::new(files.len() as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("  {bar:30} {pos}/{len} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()));
+        Some(pb)
+    } else {
+        None
+    };
+
     println!(
         "{} {} file(s) into LFS via {}...",
         if args.dry_run {
@@ -110,12 +123,8 @@ async fn run_inner(args: ImportArgs) -> Result<(), Box<dyn std::error::Error>> {
 
         // Skip files already converted to pointers
         if Pointer::is_pointer_file(file_path) {
-            println!(
-                "  {} {} (already a pointer)",
-                "Skip:".dimmed(),
-                relative.display()
-            );
             skipped += 1;
+            if let Some(ref pb) = pb { pb.inc(1); }
             continue;
         }
 
@@ -137,8 +146,9 @@ async fn run_inner(args: ImportArgs) -> Result<(), Box<dyn std::error::Error>> {
             match storage.upload(oid, file_path).await {
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e);
+                    if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e)); }
                     errors += 1;
+                    if let Some(ref pb) = pb { pb.inc(1); }
                     continue;
                 }
             }
@@ -149,13 +159,10 @@ async fn run_inner(args: ImportArgs) -> Result<(), Box<dyn std::error::Error>> {
         pointer.write(file_path)?;
         converted += 1;
 
-        println!(
-            "  {} {} ({} bytes)",
-            "Imported:".green(),
-            relative.display(),
-            pointer.size
-        );
+        if let Some(ref pb) = pb { pb.inc(1); }
     }
+
+    if let Some(pb) = pb { pb.finish_and_clear(); }
 
     if args.dry_run {
         println!(
@@ -177,27 +184,6 @@ async fn run_inner(args: ImportArgs) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Ok(())
     }
-}
-
-/// Create storage backend from config
-async fn create_storage(
-    config: &LfsConfig,
-) -> Result<Box<dyn Storage>, Box<dyn std::error::Error>> {
-    let s3_config = S3Config {
-        bucket: config.storage.bucket.clone(),
-        region: config.storage.region.clone(),
-        prefix: config.storage.prefix.clone(),
-        endpoint: config.storage.endpoint.clone(),
-        credentials: config.storage.credentials.as_ref().map(|c| {
-            crate::lfs::storage::s3::S3Credentials {
-                access_key_id: c.access_key_id.clone(),
-                secret_access_key: c.secret_access_key.clone(),
-            }
-        }),
-    };
-
-    let storage = S3Storage::new(s3_config).await?;
-    Ok(Box::new(storage))
 }
 
 /// Find all files matching LFS patterns with optional include/exclude filters

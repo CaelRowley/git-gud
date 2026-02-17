@@ -1,9 +1,11 @@
 //! Pull LFS files from remote storage
 
+use crate::lfs::storage;
 use crate::lfs::{Cache, LfsConfig, Pointer, Scanner};
-use crate::lfs::storage::{S3Config, S3Storage, Storage};
 use clap::Args;
 use colored::Colorize;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::io::IsTerminal;
 use std::path::Path;
 
 #[derive(Args, Debug)]
@@ -19,6 +21,10 @@ pub struct PullArgs {
     /// Exclude files matching pattern
     #[arg(short, long)]
     pub exclude: Option<String>,
+
+    /// Called by the post-checkout hook (old-ref new-ref flag)
+    #[arg(long, hide = true, num_args = 3, value_names = &["OLD_REF", "NEW_REF", "FLAG"])]
+    pub post_checkout: Option<Vec<String>>,
 }
 
 /// Pull LFS files from remote storage
@@ -60,19 +66,38 @@ async fn run_inner(args: PullArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Initialize storage
-    let storage = create_storage(&config).await?;
+    let storage = storage::create_storage(&config).await?;
 
     // Initialize cache
     let cache = Cache::new()?;
 
     // Scan for LFS pointer files
     let scanner = Scanner::new(repo_root)?;
-    let pointer_files = find_pointer_files(repo_root, &scanner, &args)?;
+
+    let pointer_files = if let Some(ref checkout_args) = args.post_checkout {
+        // Post-checkout mode: only pull files that changed between old and new refs
+        find_post_checkout_pointer_files(repo_root, &scanner, checkout_args)?
+    } else {
+        find_pointer_files(repo_root, &scanner, &args)?
+    };
 
     if pointer_files.is_empty() {
-        println!("{}", "No LFS pointer files found.".dimmed());
+        if args.post_checkout.is_none() {
+            println!("{}", "No LFS pointer files found.".dimmed());
+        }
         return Ok(());
     }
+
+    let show_progress = !args.dry_run && std::io::stderr().is_terminal();
+    let pb = if show_progress {
+        let pb = ProgressBar::new(pointer_files.len() as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("  {bar:30} {pos}/{len} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()));
+        Some(pb)
+    } else {
+        None
+    };
 
     println!(
         "{} {} LFS file(s) from {}...",
@@ -106,12 +131,8 @@ async fn run_inner(args: PullArgs) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(cached_path) = cache.get(oid) {
             // Copy from cache
             std::fs::copy(&cached_path, file_path)?;
-            println!(
-                "  {} {} (from cache)",
-                "Restored:".green(),
-                relative.display()
-            );
             cached += 1;
+            if let Some(ref pb) = pb { pb.inc(1); }
             continue;
         }
 
@@ -122,17 +143,14 @@ async fn run_inner(args: PullArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         match storage.download(oid, &temp_path).await {
-            Ok(result) => {
+            Ok(_result) => {
                 // Verify hash
                 let downloaded_pointer = Pointer::from_file(&temp_path)?;
                 if downloaded_pointer.oid != pointer.oid {
-                    eprintln!(
-                        "  {} {} - hash mismatch!",
-                        "Error:".red(),
-                        relative.display()
-                    );
+                    if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - hash mismatch!", "Error:".red(), relative.display())); }
                     std::fs::remove_file(&temp_path).ok();
                     errors += 1;
+                    if let Some(ref pb) = pb { pb.inc(1); }
                     continue;
                 }
 
@@ -142,25 +160,17 @@ async fn run_inner(args: PullArgs) -> Result<(), Box<dyn std::error::Error>> {
                 // Move to final location
                 std::fs::rename(&temp_path, file_path)?;
 
-                println!(
-                    "  {} {} ({} bytes)",
-                    "Downloaded:".green(),
-                    relative.display(),
-                    result.size
-                );
                 downloaded += 1;
             }
             Err(e) => {
-                eprintln!(
-                    "  {} {} - {}",
-                    "Failed:".red(),
-                    relative.display(),
-                    e
-                );
+                if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e)); }
                 errors += 1;
             }
         }
+        if let Some(ref pb) = pb { pb.inc(1); }
     }
+
+    if let Some(pb) = pb { pb.finish_and_clear(); }
 
     // Clean up temp directory
     let temp_dir = repo_root.join(".gg").join("tmp");
@@ -185,25 +195,6 @@ async fn run_inner(args: PullArgs) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Ok(())
     }
-}
-
-/// Create storage backend from config
-async fn create_storage(config: &LfsConfig) -> Result<Box<dyn Storage>, Box<dyn std::error::Error>> {
-    let s3_config = S3Config {
-        bucket: config.storage.bucket.clone(),
-        region: config.storage.region.clone(),
-        prefix: config.storage.prefix.clone(),
-        endpoint: config.storage.endpoint.clone(),
-        credentials: config.storage.credentials.as_ref().map(|c| {
-            crate::lfs::storage::s3::S3Credentials {
-                access_key_id: c.access_key_id.clone(),
-                secret_access_key: c.secret_access_key.clone(),
-            }
-        }),
-    };
-
-    let storage = S3Storage::new(s3_config).await?;
-    Ok(Box::new(storage))
 }
 
 /// Find all pointer files in the repository
@@ -241,6 +232,42 @@ fn find_pointer_files(
         // Check if it's a pointer file
         if let Ok(pointer) = Pointer::parse(&file_path) {
             pointers.push((file_path, pointer));
+        }
+    }
+
+    Ok(pointers)
+}
+
+/// Find pointer files that changed between two refs (for post-checkout hook).
+/// checkout_args: [old_ref, new_ref, flag]
+fn find_post_checkout_pointer_files(
+    repo_root: &Path,
+    scanner: &Scanner,
+    checkout_args: &[String],
+) -> Result<Vec<(std::path::PathBuf, Pointer)>, Box<dyn std::error::Error>> {
+    let old_ref = &checkout_args[0];
+    let new_ref = &checkout_args[1];
+
+    // Get files that changed between old and new refs
+    let output = std::process::Command::new("git")
+        .args(["diff-tree", "-r", "--name-only", old_ref, new_ref])
+        .current_dir(repo_root)
+        .output()?;
+
+    let mut pointers = Vec::new();
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let path = Path::new(line);
+            if scanner.is_lfs_file(path) {
+                let full_path = repo_root.join(path);
+                if full_path.exists() {
+                    if let Ok(pointer) = Pointer::parse(&full_path) {
+                        pointers.push((full_path, pointer));
+                    }
+                }
+            }
         }
     }
 

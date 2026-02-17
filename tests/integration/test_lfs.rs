@@ -20,6 +20,8 @@ fn lfs_help_shows_subcommands() {
     assert!(stdout.contains("push") || stdout.contains("Push"));
     assert!(stdout.contains("pull") || stdout.contains("Pull"));
     assert!(stdout.contains("status") || stdout.contains("Status"));
+    assert!(stdout.contains("prune") || stdout.contains("Prune"));
+    assert!(stdout.contains("ls-files") || stdout.contains("Ls"));
 }
 
 #[test]
@@ -193,7 +195,7 @@ fn lfs_track_creates_gitattributes() {
 
     let content = fs::read_to_string(&gitattributes).unwrap();
     assert!(content.contains("*.psd"));
-    assert!(content.contains("filter=lfs"));
+    assert!(content.contains("filter=gg-lfs"));
 }
 
 #[test]
@@ -209,7 +211,7 @@ fn lfs_track_appends_to_existing_gitattributes() {
     let content = fs::read_to_string(&gitattributes).unwrap();
     assert!(content.contains("*.txt text"));
     assert!(content.contains("*.psd"));
-    assert!(content.contains("filter=lfs"));
+    assert!(content.contains("filter=gg-lfs"));
 }
 
 #[test]
@@ -331,6 +333,38 @@ fn lfs_status_verbose_flag() {
     assert_eq!(code, 0);
     // Verbose should show individual files or more details
     assert!(stdout.contains("test.psd") || stdout.contains("file") || stdout.contains("LFS"));
+}
+
+// ============================================
+// LFS Scanner Respects .gitignore
+// ============================================
+
+#[test]
+fn lfs_scanner_respects_gitignore() {
+    let repo = TempRepo::new();
+
+    // Track *.bin
+    repo.gg(&["lfs", "track", "*.bin"]);
+
+    // Create a .gitignore that ignores the build/ directory
+    repo.create_file(".gitignore", "build/\n");
+
+    // Create matching files: one tracked, one inside gitignored dir
+    repo.create_file("data.bin", "tracked binary");
+    fs::create_dir_all(repo.path.join("build")).unwrap();
+    repo.create_file("build/output.bin", "ignored binary");
+
+    // Status in verbose mode should show data.bin but NOT build/output.bin
+    let (code, stdout, _) = repo.gg(&["lfs", "status", "-v"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("data.bin"),
+        "data.bin should be found by scanner"
+    );
+    assert!(
+        !stdout.contains("build/output.bin"),
+        "build/output.bin should be excluded by .gitignore"
+    );
 }
 
 // ============================================
@@ -737,12 +771,13 @@ fn lfs_install_registers_filter_driver() {
     let repo = TempRepo::new();
     repo.gg(&["lfs", "install"]);
 
-    let clean = repo.git_output(&["config", "filter.lfs.clean"]);
-    let smudge = repo.git_output(&["config", "filter.lfs.smudge"]);
-    let required = repo.git_output(&["config", "filter.lfs.required"]);
+    let clean = repo.git_output(&["config", "filter.gg-lfs.clean"]);
+    let smudge = repo.git_output(&["config", "filter.gg-lfs.smudge"]);
+    let required = repo.git_output(&["config", "filter.gg-lfs.required"]);
 
-    assert_eq!(clean, "gg lfs clean %f");
-    assert_eq!(smudge, "gg lfs smudge %f");
+    // Filter commands contain the full path to the gg binary
+    assert!(clean.contains("lfs clean %f"), "clean filter should contain 'lfs clean %f', got: {}", clean);
+    assert!(smudge.contains("lfs smudge %f"), "smudge filter should contain 'lfs smudge %f', got: {}", smudge);
     assert_eq!(required, "true");
 }
 
@@ -754,18 +789,47 @@ fn lfs_uninstall_removes_filter_driver() {
     repo.gg(&["lfs", "install"]);
 
     // Verify it's set locally
-    let clean = repo.git_output(&["config", "--local", "filter.lfs.clean"]);
-    assert_eq!(clean, "gg lfs clean %f");
+    let clean = repo.git_output(&["config", "--local", "filter.gg-lfs.clean"]);
+    assert!(clean.contains("lfs clean %f"));
 
     // Uninstall
     repo.gg(&["lfs", "uninstall"]);
 
     // Verify the local config no longer has it
-    let output = repo.run_git(&["config", "--local", "filter.lfs.clean"]);
+    let output = repo.run_git(&["config", "--local", "filter.gg-lfs.clean"]);
     assert!(
         !output.status.success(),
-        "filter.lfs.clean should be unset in local config after uninstall"
+        "filter.gg-lfs.clean should be unset in local config after uninstall"
     );
+}
+
+#[test]
+fn lfs_install_migrates_old_filter_name() {
+    let repo = TempRepo::new();
+
+    // Simulate old-style setup: filter=lfs in .gitattributes, filter.lfs.clean = "gg lfs clean %f"
+    let gitattributes = repo.path.join(".gitattributes");
+    fs::write(&gitattributes, "*.bin filter=lfs diff=lfs merge=lfs -text\n").unwrap();
+    repo.run_git(&["config", "filter.lfs.clean", "gg lfs clean %f"]);
+    repo.run_git(&["config", "filter.lfs.smudge", "gg lfs smudge %f"]);
+
+    // Running install should migrate
+    let (code, stdout, _) = repo.gg(&["lfs", "install"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Migrated") || stdout.contains("migrated"));
+
+    // .gitattributes should now have filter=gg-lfs
+    let content = fs::read_to_string(&gitattributes).unwrap();
+    assert!(content.contains("filter=gg-lfs"));
+    assert!(!content.contains("filter=lfs "), "Old filter=lfs should be replaced");
+
+    // Old filter.lfs keys should be gone
+    let output = repo.run_git(&["config", "--local", "filter.lfs.clean"]);
+    assert!(!output.status.success(), "filter.lfs.clean should be unset after migration");
+
+    // New filter.gg-lfs keys should be set
+    let clean = repo.git_output(&["config", "filter.gg-lfs.clean"]);
+    assert!(clean.contains("lfs clean %f"));
 }
 
 // ============================================
@@ -899,6 +963,63 @@ fn lfs_smudge_cache_miss_no_config() {
 }
 
 // ============================================
+// LFS Skip Smudge Tests
+// ============================================
+
+#[test]
+fn lfs_smudge_skip_env_passes_through() {
+    let repo = TempRepo::new();
+    let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n";
+
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gg"))
+        .args(["lfs", "smudge", "test.bin"])
+        .current_dir(&repo.path)
+        .env("GG_LFS_SKIP_SMUDGE", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn");
+
+    child.stdin.take().unwrap().write_all(pointer).unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(output.status.code().unwrap_or(-1), 0);
+    assert_eq!(
+        &output.stdout, pointer,
+        "With GG_LFS_SKIP_SMUDGE=1, pointer should pass through unchanged"
+    );
+}
+
+// ============================================
+// LFS Pre-push / Post-checkout Flag Tests
+// ============================================
+
+#[test]
+fn lfs_push_pre_push_flag_accepted() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+
+    // --pre-push should be accepted (reads from stdin, which will be empty in test)
+    let (_, _, stderr) = repo.gg(&["lfs", "push", "--pre-push"]);
+    assert!(!stderr.contains("unexpected argument"));
+}
+
+#[test]
+fn lfs_pull_post_checkout_flag_accepted() {
+    let repo = TempRepo::new();
+    repo.gg(&["lfs", "install"]);
+
+    // --post-checkout with 3 values should be accepted
+    let head = repo.git_output(&["rev-parse", "HEAD"]);
+    let (_, _, stderr) = repo.gg(&["lfs", "pull", "--post-checkout", &head, &head, "1"]);
+    assert!(!stderr.contains("unexpected argument"));
+}
+
+// ============================================
 // LFS Install Idempotency Tests
 // ============================================
 
@@ -983,6 +1104,127 @@ fn cli_lfs_in_main_help() {
     let output = gg().arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("lfs") || stdout.contains("Lfs") || stdout.contains("LFS"));
+}
+
+// ============================================
+// LFS Prune Tests
+// ============================================
+
+#[test]
+fn lfs_prune_help() {
+    let repo = TempRepo::new();
+    let (code, stdout, _) = repo.gg(&["lfs", "prune", "--help"]);
+
+    assert_eq!(code, 0);
+    assert!(stdout.contains("--days") || stdout.contains("days"));
+    assert!(stdout.contains("--dry-run") || stdout.contains("dry"));
+}
+
+#[test]
+fn lfs_prune_runs_successfully() {
+    let repo = TempRepo::new();
+    let (code, stdout, _) = repo.gg(&["lfs", "prune"]);
+
+    assert_eq!(code, 0);
+    // Should show either "empty" (no cache) or "Done"/"No objects" (has cache)
+    assert!(
+        stdout.contains("empty") || stdout.contains("Done") || stdout.contains("No objects"),
+        "Unexpected output: {}", stdout
+    );
+}
+
+#[test]
+fn lfs_prune_dry_run() {
+    let repo = TempRepo::new();
+    let (code, _stdout, _) = repo.gg(&["lfs", "prune", "--dry-run"]);
+
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn lfs_prune_days_flag() {
+    let repo = TempRepo::new();
+    let (code, _, _) = repo.gg(&["lfs", "prune", "--days", "7"]);
+
+    assert_eq!(code, 0);
+}
+
+// ============================================
+// LFS Ls-Files Tests
+// ============================================
+
+#[test]
+fn lfs_ls_files_help() {
+    let repo = TempRepo::new();
+    let (code, stdout, _) = repo.gg(&["lfs", "ls-files", "--help"]);
+
+    assert_eq!(code, 0);
+    assert!(stdout.contains("--long") || stdout.contains("long"));
+}
+
+#[test]
+fn lfs_ls_files_no_patterns() {
+    let repo = TempRepo::new();
+    let (code, stdout, _) = repo.gg(&["lfs", "ls-files"]);
+
+    assert_eq!(code, 0);
+    assert!(stdout.contains("No LFS patterns"));
+}
+
+#[test]
+fn lfs_ls_files_no_files() {
+    let repo = TempRepo::new();
+    // Set up gitattributes for LFS tracking
+    fs::write(
+        repo.dir.path().join(".gitattributes"),
+        "*.bin filter=gg-lfs diff=gg-lfs merge=gg-lfs -text\n",
+    )
+    .unwrap();
+
+    let (code, stdout, _) = repo.gg(&["lfs", "ls-files"]);
+
+    assert_eq!(code, 0);
+    assert!(stdout.contains("No LFS files"));
+}
+
+#[test]
+fn lfs_ls_files_shows_tracked_files() {
+    let repo = TempRepo::new();
+    // Set up gitattributes for LFS tracking
+    fs::write(
+        repo.dir.path().join(".gitattributes"),
+        "*.bin filter=gg-lfs diff=gg-lfs merge=gg-lfs -text\n",
+    )
+    .unwrap();
+
+    // Create a binary file
+    fs::write(repo.dir.path().join("test.bin"), b"binary content here").unwrap();
+
+    let (code, stdout, _) = repo.gg(&["lfs", "ls-files"]);
+
+    assert_eq!(code, 0);
+    assert!(stdout.contains("test.bin"));
+}
+
+#[test]
+fn lfs_ls_files_long_flag() {
+    let repo = TempRepo::new();
+    // Set up gitattributes for LFS tracking
+    fs::write(
+        repo.dir.path().join(".gitattributes"),
+        "*.bin filter=gg-lfs diff=gg-lfs merge=gg-lfs -text\n",
+    )
+    .unwrap();
+
+    // Create a binary file
+    fs::write(repo.dir.path().join("test.bin"), b"binary content here").unwrap();
+
+    let (code, stdout, _) = repo.gg(&["lfs", "ls-files", "--long"]);
+
+    assert_eq!(code, 0);
+    assert!(stdout.contains("test.bin"));
+    // Long format should show size and type
+    assert!(stdout.contains("B") || stdout.contains("KB") || stdout.contains("MB"));
 }
 
 #[test]

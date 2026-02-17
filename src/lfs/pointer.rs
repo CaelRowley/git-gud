@@ -52,24 +52,42 @@ pub struct Pointer {
 
 #[allow(dead_code)]
 impl Pointer {
-    /// Create a new pointer from file content
+    /// Create a new pointer from file content (streaming — no full read into memory)
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, PointerError> {
-        let path = path.as_ref();
-        let mut file = File::open(path)?;
+        let file = File::open(path.as_ref())?;
+        Self::from_reader(file, None)
+    }
 
-        // Read file and compute hash
+    /// Create a pointer by streaming content from a reader.
+    /// Optionally writes the content to `cache_path` while hashing.
+    pub fn from_reader<R: Read>(
+        mut reader: R,
+        cache_path: Option<&Path>,
+    ) -> Result<Self, PointerError> {
         let mut hasher = Sha256::new();
-        let mut buffer = Vec::new();
-        let size = file.read_to_end(&mut buffer)?;
+        let mut size: u64 = 0;
+        let mut cache_file = cache_path.map(|p| File::create(p)).transpose()?;
+        let mut buf = [0u8; 64 * 1024];
 
-        hasher.update(&buffer);
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            size += n as u64;
+            if let Some(ref mut f) = cache_file {
+                f.write_all(&buf[..n])?;
+            }
+        }
+
         let hash = hasher.finalize();
         let oid = format!("sha256:{:x}", hash);
 
         Ok(Self {
             version: LFS_VERSION.to_string(),
             oid,
-            size: size as u64,
+            size,
         })
     }
 
@@ -195,7 +213,7 @@ impl std::fmt::Display for Pointer {
         // Version must come first, then alphabetically sorted keys
         writeln!(f, "version {}", self.version)?;
         writeln!(f, "oid {}", self.oid)?;
-        write!(f, "size {}", self.size)
+        writeln!(f, "size {}", self.size)
     }
 }
 
@@ -250,6 +268,7 @@ mod tests {
         assert!(output.starts_with("version "));
         assert!(output.contains("oid sha256:"));
         assert!(output.contains("size 12345"));
+        assert!(output.ends_with('\n'), "Pointer display must end with newline");
     }
 
     #[test]

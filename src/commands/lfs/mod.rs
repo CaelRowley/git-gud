@@ -5,7 +5,9 @@
 pub mod clean;
 pub mod import;
 pub mod install;
+pub mod ls_files;
 pub mod migrate;
+pub mod prune;
 pub mod pull;
 pub mod push;
 pub mod smudge;
@@ -18,7 +20,9 @@ use clap::{Args, Subcommand};
 pub use clean::CleanArgs;
 pub use import::ImportArgs;
 pub use install::{InstallArgs, UninstallArgs};
+pub use ls_files::LsFilesArgs;
 pub use migrate::MigrateArgs;
+pub use prune::PruneArgs;
 pub use pull::PullArgs;
 pub use push::PushArgs;
 pub use smudge::SmudgeArgs;
@@ -63,6 +67,12 @@ pub enum LfsCommand {
     /// Show LFS status
     Status(StatusArgs),
 
+    /// List LFS-tracked files
+    LsFiles(LsFilesArgs),
+
+    /// Prune old objects from the local LFS cache
+    Prune(PruneArgs),
+
     /// Verify S3 configuration and connectivity
     Verify(VerifyArgs),
 
@@ -85,6 +95,8 @@ pub fn run(args: LfsArgs) -> i32 {
         LfsCommand::Push(args) => push::run(args),
         LfsCommand::Pull(args) => pull::run(args),
         LfsCommand::Status(args) => status::run(args),
+        LfsCommand::LsFiles(args) => ls_files::run(args),
+        LfsCommand::Prune(args) => prune::run(args),
         LfsCommand::Verify(args) => verify::run(args),
         LfsCommand::Clean(args) => clean::run(args),
         LfsCommand::Smudge(args) => smudge::run(args),

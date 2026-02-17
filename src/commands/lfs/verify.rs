@@ -88,8 +88,10 @@ async fn run_inner(args: VerifyArgs) -> Result<(), Box<dyn std::error::Error>> {
         Some(_) => println!("{}", "OK".green()),
         None => {
             println!("{}", "WARNING".yellow());
-            println!("    {}", "No credentials found. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY,".yellow());
-            println!("    {}", "or configure ~/.aws/credentials".yellow());
+            println!("    {}", "No credentials found. Options:".yellow());
+            println!("    {}",   "  1. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY env vars".yellow());
+            println!("    {}",   "  2. Configure ~/.aws/credentials".yellow());
+            println!("    {}",   "  3. Add [storage.credentials] to .gg/lfs.toml".yellow());
         }
     }
 
@@ -121,9 +123,9 @@ async fn run_inner(args: VerifyArgs) -> Result<(), Box<dyn std::error::Error>> {
                     config.storage.bucket
                 ).into());
             } else if err_str.contains("InvalidAccessKeyId") {
-                return Err("Invalid AWS access key ID.\n\nCheck your AWS_ACCESS_KEY_ID is correct.".into());
+                return Err("Invalid AWS access key ID.\n\nCheck your credentials (env vars, ~/.aws/credentials, or [storage.credentials] in .gg/lfs.toml).".into());
             } else if err_str.contains("SignatureDoesNotMatch") {
-                return Err("Invalid AWS secret access key.\n\nCheck your AWS_SECRET_ACCESS_KEY is correct.".into());
+                return Err("Invalid AWS secret access key.\n\nCheck your credentials (env vars, ~/.aws/credentials, or [storage.credentials] in .gg/lfs.toml).".into());
             } else if err_str.contains("timeout") || err_str.contains("Timeout") {
                 return Err(format!(
                     "Connection timeout.\n\nCheck your network connection and region setting (current: {}).",

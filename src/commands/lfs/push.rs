@@ -1,9 +1,11 @@
 //! Push LFS files to remote storage
 
+use crate::lfs::storage;
 use crate::lfs::{Cache, LfsConfig, Pointer, Scanner};
-use crate::lfs::storage::{S3Config, S3Storage, Storage};
 use clap::Args;
 use colored::Colorize;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::io::{BufRead, IsTerminal};
 use std::path::Path;
 
 #[derive(Args, Debug)]
@@ -15,11 +17,14 @@ pub struct PushArgs {
     /// Push all LFS files, not just staged ones
     #[arg(short, long)]
     pub all: bool,
+
+    /// Called by the pre-push hook (reads refs from stdin)
+    #[arg(long, hide = true)]
+    pub pre_push: bool,
 }
 
 /// Push LFS files to remote storage
 pub fn run(args: PushArgs) -> i32 {
-    // Create tokio runtime for async operations
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -45,161 +50,174 @@ async fn run_inner(args: PushArgs) -> Result<(), Box<dyn std::error::Error>> {
         .workdir()
         .ok_or("Not a git repository with a working directory")?;
 
-    // Load config
     let config = LfsConfig::load(repo_root).map_err(|e| {
-        format!(
-            "{}\nRun 'gg lfs install' to create a configuration file.",
-            e
-        )
+        format!("{}\nRun 'gg lfs install' to create a configuration file.", e)
     })?;
 
-    // Initialize storage
-    let storage = create_storage(&config).await?;
-
-    // Initialize cache
+    let storage = storage::create_storage(&config).await?;
     let cache = Cache::new()?;
-
-    // Scan for LFS files
     let scanner = Scanner::new(repo_root)?;
-    let patterns = scanner.patterns();
 
-    if patterns.is_empty() {
-        println!(
-            "{}",
-            "No LFS patterns defined. Use 'gg lfs track <pattern>' to add files.".yellow()
-        );
+    if scanner.patterns().is_empty() {
+        println!("{}", "No LFS patterns defined. Use 'gg lfs track <pattern>' to add files.".yellow());
         return Ok(());
     }
 
-    // Find files to push
-    let files = if args.all {
+    let files = if args.pre_push {
+        get_pre_push_lfs_files(repo_root, &scanner)?
+    } else if args.all {
         scanner.scan_files()?
     } else {
-        // Get staged files that match LFS patterns
         get_staged_lfs_files(&repo, &scanner)?
     };
 
     if files.is_empty() {
-        println!("{}", "No LFS files to push.".dimmed());
+        if !args.pre_push {
+            println!("{}", "No LFS files to push.".dimmed());
+        }
         return Ok(());
     }
 
-    println!(
-        "{} {} LFS file(s) to {}...",
-        if args.dry_run { "Would push" } else { "Pushing" },
-        files.len(),
-        storage.provider_name().cyan()
-    );
+    let show_progress = !args.dry_run && std::io::stderr().is_terminal();
+    let pb = if show_progress {
+        let pb = ProgressBar::new(files.len() as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("  {bar:30} {pos}/{len} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()));
+        Some(pb)
+    } else {
+        None
+    };
+
+    if !args.dry_run {
+        println!(
+            "{} {} LFS file(s) to {}...",
+            "Pushing", files.len(), storage.provider_name().cyan()
+        );
+    }
 
     let mut uploaded = 0;
     let mut skipped = 0;
     let mut errors = 0;
 
     for file_path in &files {
-        let relative = file_path
-            .strip_prefix(repo_root)
-            .unwrap_or(file_path);
+        let relative = file_path.strip_prefix(repo_root).unwrap_or(file_path);
 
-        // Skip if already a pointer file
-        if Pointer::is_pointer_file(file_path) {
-            println!("  {} {} (already a pointer)", "Skip:".dimmed(), relative.display());
-            skipped += 1;
+        if !Pointer::is_pointer_file(file_path) {
+            if !args.pre_push {
+                let pointer = Pointer::from_file(file_path)?;
+                let oid = pointer.sha256();
+
+                if args.dry_run {
+                    println!("  {} {} ({} bytes)", "Would upload:".cyan(), relative.display(), pointer.size);
+                    continue;
+                }
+
+                if storage.exists(oid).await? {
+                    replace_with_pointer(file_path, &pointer, &cache)?;
+                    skipped += 1;
+                } else {
+                    match storage.upload(oid, file_path).await {
+                        Ok(_) => {
+                            uploaded += 1;
+                            cache.put_file(oid, file_path)?;
+                            replace_with_pointer(file_path, &pointer, &cache)?;
+                        }
+                        Err(e) => {
+                            if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e)); }
+                            errors += 1;
+                        }
+                    }
+                }
+            }
+            if let Some(ref pb) = pb { pb.inc(1); }
             continue;
         }
 
-        // Create pointer from file
-        let pointer = Pointer::from_file(file_path)?;
+        let pointer = Pointer::parse(file_path)?;
         let oid = pointer.sha256();
 
         if args.dry_run {
-            println!(
-                "  {} {} ({} bytes)",
-                "Would upload:".cyan(),
-                relative.display(),
-                pointer.size
-            );
+            println!("  {} {} ({} bytes)", "Would upload:".cyan(), relative.display(), pointer.size);
             continue;
         }
 
-        // Check if already in storage
         if storage.exists(oid).await? {
-            println!(
-                "  {} {} (already in storage)",
-                "Skip:".dimmed(),
-                relative.display()
-            );
-
-            // Still need to replace with pointer if it's not already
-            replace_with_pointer(file_path, &pointer, &cache)?;
             skipped += 1;
+            if let Some(ref pb) = pb { pb.inc(1); }
             continue;
         }
 
-        // Upload to storage
-        match storage.upload(oid, file_path).await {
-            Ok(result) => {
-                if result.uploaded {
-                    println!(
-                        "  {} {} ({} bytes)",
-                        "Uploaded:".green(),
-                        relative.display(),
-                        result.size
-                    );
-                    uploaded += 1;
+        if let Some(cached_path) = cache.get(oid) {
+            match storage.upload(oid, &cached_path).await {
+                Ok(_) => { uploaded += 1; }
+                Err(e) => {
+                    if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e)); }
+                    errors += 1;
                 }
-
-                // Cache the file locally and replace with pointer
-                cache.put_file(oid, file_path)?;
-                replace_with_pointer(file_path, &pointer, &cache)?;
             }
-            Err(e) => {
-                eprintln!(
-                    "  {} {} - {}",
-                    "Failed:".red(),
-                    relative.display(),
-                    e
-                );
-                errors += 1;
-            }
+        } else {
+            skipped += 1;
         }
+        if let Some(ref pb) = pb { pb.inc(1); }
     }
+
+    if let Some(pb) = pb { pb.finish_and_clear(); }
 
     if args.dry_run {
         println!("\n{}", "Dry run - no files were actually uploaded.".yellow());
     } else {
         println!(
-            "\n{}: {} uploaded, {} skipped, {} errors",
-            "Done".green().bold(),
-            uploaded,
-            skipped,
-            errors
+            "{}: {} uploaded, {} skipped, {} errors",
+            "Done".green().bold(), uploaded, skipped, errors
         );
     }
 
-    if errors > 0 {
-        Err("Some files failed to upload".into())
-    } else {
-        Ok(())
-    }
+    if errors > 0 { Err("Some files failed to upload".into()) } else { Ok(()) }
 }
 
-/// Create storage backend from config
-async fn create_storage(config: &LfsConfig) -> Result<Box<dyn Storage>, Box<dyn std::error::Error>> {
-    let s3_config = S3Config {
-        bucket: config.storage.bucket.clone(),
-        region: config.storage.region.clone(),
-        prefix: config.storage.prefix.clone(),
-        endpoint: config.storage.endpoint.clone(),
-        credentials: config.storage.credentials.as_ref().map(|c| {
-            crate::lfs::storage::s3::S3Credentials {
-                access_key_id: c.access_key_id.clone(),
-                secret_access_key: c.secret_access_key.clone(),
-            }
-        }),
-    };
+/// Get files to push based on pre-push hook stdin
+fn get_pre_push_lfs_files(
+    repo_root: &Path,
+    scanner: &Scanner,
+) -> Result<Vec<std::path::PathBuf>, Box<dyn std::error::Error>> {
+    let mut files = std::collections::HashSet::new();
+    let stdin = std::io::stdin();
 
-    let storage = S3Storage::new(s3_config).await?;
-    Ok(Box::new(storage))
+    for line in stdin.lock().lines() {
+        let line = line?;
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 4 { continue; }
+
+        let local_sha = parts[1];
+        let remote_sha = parts[3];
+
+        if local_sha == "0000000000000000000000000000000000000000" { continue; }
+
+        let diff_args = if remote_sha == "0000000000000000000000000000000000000000" {
+            vec!["diff-tree", "-r", "--diff-filter=ACMR", "--name-only", "--root", local_sha]
+        } else {
+            vec!["diff-tree", "-r", "--diff-filter=ACMR", "--name-only", remote_sha, local_sha]
+        };
+
+        let output = std::process::Command::new("git")
+            .args(&diff_args)
+            .current_dir(repo_root)
+            .output()?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for file_line in stdout.lines() {
+                let path = Path::new(file_line);
+                if scanner.is_lfs_file(path) {
+                    let full_path = repo_root.join(path);
+                    if full_path.exists() { files.insert(full_path); }
+                }
+            }
+        }
+    }
+
+    Ok(files.into_iter().collect())
 }
 
 /// Get staged files that match LFS patterns
@@ -209,18 +227,14 @@ fn get_staged_lfs_files(
 ) -> Result<Vec<std::path::PathBuf>, Box<dyn std::error::Error>> {
     let mut files = Vec::new();
     let repo_root = repo.workdir().ok_or("No working directory")?;
-
     let index = repo.index()?;
 
     for entry in index.iter() {
         let path_str = String::from_utf8_lossy(&entry.path);
         let path = Path::new(path_str.as_ref());
-
         if scanner.is_lfs_file(path) {
             let full_path = repo_root.join(path);
-            if full_path.exists() {
-                files.push(full_path);
-            }
+            if full_path.exists() { files.push(full_path); }
         }
     }
 
@@ -233,7 +247,6 @@ fn replace_with_pointer(
     pointer: &Pointer,
     _cache: &Cache,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Write pointer file
     pointer.write(file_path)?;
     Ok(())
 }

@@ -47,6 +47,11 @@ impl Cache {
         Ok(Self { root })
     }
 
+    /// Get the temporary directory for in-progress operations
+    pub fn temp_dir(&self) -> PathBuf {
+        self.root.join("tmp")
+    }
+
     /// Get the path for a cached object
     fn object_path(&self, oid: &str) -> PathBuf {
         // Use first 2 chars as subdirectory for better filesystem performance

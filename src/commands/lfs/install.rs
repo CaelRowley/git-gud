@@ -4,6 +4,7 @@ use crate::lfs::LfsConfig;
 use clap::Args;
 use colored::Colorize;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
@@ -18,27 +19,27 @@ pub struct InstallArgs {
 #[derive(Args, Debug)]
 pub struct UninstallArgs {}
 
-/// Hook script content
-const PRE_PUSH_HOOK: &str = r#"#!/bin/sh
-# gg-lfs pre-push hook
-# Automatically push LFS files before git push
+/// Generate hook script content using the full path to the gg binary
+fn pre_push_hook(gg_path: &str) -> String {
+    format!(
+        "#!/bin/sh\n# gg-lfs pre-push hook\n# Automatically push LFS files before git push\n\nexec {} lfs push --pre-push\n",
+        gg_path
+    )
+}
 
-exec gg lfs push
-"#;
+fn post_checkout_hook(gg_path: &str) -> String {
+    format!(
+        "#!/bin/sh\n# gg-lfs post-checkout hook\n# Automatically pull LFS files after checkout\n\nexec {} lfs pull --post-checkout \"$1\" \"$2\" \"$3\"\n",
+        gg_path
+    )
+}
 
-const POST_CHECKOUT_HOOK: &str = r#"#!/bin/sh
-# gg-lfs post-checkout hook
-# Automatically pull LFS files after checkout
-
-exec gg lfs pull
-"#;
-
-const POST_MERGE_HOOK: &str = r#"#!/bin/sh
-# gg-lfs post-merge hook
-# Automatically pull LFS files after merge
-
-exec gg lfs pull
-"#;
+fn post_merge_hook(gg_path: &str) -> String {
+    format!(
+        "#!/bin/sh\n# gg-lfs post-merge hook\n# Automatically pull LFS files after merge\n\nexec {} lfs pull\n",
+        gg_path
+    )
+}
 
 /// Install LFS hooks
 pub fn run(args: InstallArgs) -> i32 {
@@ -61,14 +62,18 @@ fn run_inner(args: InstallArgs) -> Result<(), Box<dyn std::error::Error>> {
     let hooks_dir = repo_root.join(".git").join("hooks");
     fs::create_dir_all(&hooks_dir)?;
 
+    // Resolve gg binary path for hooks
+    let gg_bin = std::env::current_exe()?;
+    let gg_path = gg_bin.to_string_lossy().to_string();
+
     // Install hooks
     let hooks = [
-        ("pre-push", PRE_PUSH_HOOK),
-        ("post-checkout", POST_CHECKOUT_HOOK),
-        ("post-merge", POST_MERGE_HOOK),
+        ("pre-push", pre_push_hook(&gg_path)),
+        ("post-checkout", post_checkout_hook(&gg_path)),
+        ("post-merge", post_merge_hook(&gg_path)),
     ];
 
-    for (name, content) in hooks {
+    for (name, content) in &hooks {
         let hook_path = hooks_dir.join(name);
 
         if hook_path.exists() && !args.force {
@@ -87,9 +92,12 @@ fn run_inner(args: InstallArgs) -> Result<(), Box<dyn std::error::Error>> {
         fs::write(&hook_path, content)?;
 
         // Make executable
-        let mut perms = fs::metadata(&hook_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&hook_path, perms)?;
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&hook_path)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&hook_path, perms)?;
+        }
 
         println!("{} {}", "Installed:".green(), name);
     }
@@ -110,6 +118,9 @@ fn run_inner(args: InstallArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // Add .gg/ to .gitignore if not already there
     add_to_gitignore(repo_root)?;
+
+    // Migrate old filter name if needed
+    migrate_filter_name(repo_root)?;
 
     // Register filter driver in git config
     register_filter_driver(repo_root)?;
@@ -166,10 +177,18 @@ fn run_uninstall_inner() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Register the gg lfs filter driver in git config
 pub fn register_filter_driver(repo_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Use the full path to the current binary so the filter works even if
+    // `gg` is not yet in PATH (e.g. running from cargo build directory).
+    let gg_bin = std::env::current_exe()?;
+    let gg_path = gg_bin.to_string_lossy();
+
+    let clean_cmd = format!("{} lfs clean %f", gg_path);
+    let smudge_cmd = format!("{} lfs smudge %f", gg_path);
+
     let configs = [
-        ("filter.lfs.clean", "gg lfs clean %f"),
-        ("filter.lfs.smudge", "gg lfs smudge %f"),
-        ("filter.lfs.required", "true"),
+        ("filter.gg-lfs.clean", clean_cmd.as_str()),
+        ("filter.gg-lfs.smudge", smudge_cmd.as_str()),
+        ("filter.gg-lfs.required", "true"),
     ];
 
     for (key, value) in configs {
@@ -188,7 +207,11 @@ pub fn register_filter_driver(repo_root: &Path) -> Result<(), Box<dyn std::error
 
 /// Remove the gg lfs filter driver from git config
 pub fn unregister_filter_driver(repo_root: &Path) {
-    let keys = ["filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.required"];
+    let keys = [
+        "filter.gg-lfs.clean", "filter.gg-lfs.smudge", "filter.gg-lfs.required",
+        // Also clean up old filter.lfs keys if they were ours
+        "filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.required",
+    ];
 
     for key in keys {
         // Ignore errors — key may not exist
@@ -199,6 +222,50 @@ pub fn unregister_filter_driver(repo_root: &Path) {
     }
 
     println!("{} filter driver", "Removed:".green());
+}
+
+/// Migrate old `filter=lfs` entries to `filter=gg-lfs` in .gitattributes
+/// and unregister the old filter.lfs.* git config keys.
+/// Only migrates if the old filter.lfs.clean was set to our command ("gg lfs").
+fn migrate_filter_name(repo_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let gitattributes = repo_root.join(".gitattributes");
+    if !gitattributes.exists() {
+        return Ok(());
+    }
+
+    // Check if old filter.lfs.clean points to our command
+    let output = Command::new("git")
+        .args(["config", "filter.lfs.clean"])
+        .current_dir(repo_root)
+        .output()?;
+    let old_clean = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !old_clean.contains("gg lfs") {
+        return Ok(());
+    }
+
+    // Check if .gitattributes has old-style filter=lfs entries
+    let content = fs::read_to_string(&gitattributes)?;
+    if !content.contains("filter=lfs") {
+        return Ok(());
+    }
+
+    // Replace filter=lfs with filter=gg-lfs (and diff=, merge=)
+    let new_content = content
+        .replace("filter=lfs", "filter=gg-lfs")
+        .replace("diff=lfs", "diff=gg-lfs")
+        .replace("merge=lfs", "merge=gg-lfs");
+    fs::write(&gitattributes, new_content)?;
+
+    // Unregister old filter.lfs.* keys
+    for key in ["filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.required"] {
+        let _ = Command::new("git")
+            .args(["config", "--unset", key])
+            .current_dir(repo_root)
+            .status();
+    }
+
+    println!("{} .gitattributes filter=lfs -> filter=gg-lfs", "Migrated:".green());
+    Ok(())
 }
 
 /// Add .gg/ to .gitignore

@@ -6,7 +6,7 @@
 //! Reads pointer text from stdin, outputs real file content to stdout.
 //! Checks local cache first, falls back to S3 download on cache miss.
 
-use crate::lfs::storage::{S3Config, S3Storage, Storage};
+use crate::lfs::storage;
 use crate::lfs::{Cache, LfsConfig, Pointer};
 use clap::Args;
 use std::io::{self, BufReader, Read, Write};
@@ -29,6 +29,12 @@ pub fn run(args: SmudgeArgs) -> i32 {
 }
 
 fn run_inner(args: SmudgeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    // Skip smudge if GG_LFS_SKIP_SMUDGE=1 (useful for CI)
+    if std::env::var("GG_LFS_SKIP_SMUDGE").unwrap_or_default() == "1" {
+        io::copy(&mut io::stdin(), &mut io::stdout())?;
+        return Ok(());
+    }
+
     // Read all content from stdin
     let mut content = Vec::new();
     io::stdin().read_to_end(&mut content)?;
@@ -101,20 +107,7 @@ fn run_inner(args: SmudgeArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Need async runtime for S3 download
     let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(async {
-        let s3_config = S3Config {
-            bucket: config.storage.bucket.clone(),
-            region: config.storage.region.clone(),
-            prefix: config.storage.prefix.clone(),
-            endpoint: config.storage.endpoint.clone(),
-            credentials: config.storage.credentials.as_ref().map(|c| {
-                crate::lfs::storage::s3::S3Credentials {
-                    access_key_id: c.access_key_id.clone(),
-                    secret_access_key: c.secret_access_key.clone(),
-                }
-            }),
-        };
-
-        let storage = S3Storage::new(s3_config).await?;
+        let storage = storage::create_storage(&config).await?;
 
         // Download to a temp file
         let temp_dir = repo_root.join(".gg").join("tmp");

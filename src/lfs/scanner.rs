@@ -3,9 +3,9 @@
 //! Scans the repository for files matching LFS patterns defined in .gitattributes
 
 use glob::Pattern;
-use std::collections::HashSet;
+use ignore::WalkBuilder;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -99,8 +99,9 @@ impl Scanner {
             }
 
             // Parse .gitattributes line: pattern attr1 attr2 ...
-            // LFS files have: filter=lfs diff=lfs merge=lfs -text
-            if line.contains("filter=lfs") {
+            // LFS files have: filter=gg-lfs diff=gg-lfs merge=gg-lfs -text
+            // Also accept old filter=lfs for backwards compatibility
+            if line.contains("filter=gg-lfs") || line.contains("filter=lfs") {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if let Some(pattern) = parts.first() {
                     if let Ok(lfs_pattern) = LfsPattern::new(pattern) {
@@ -132,20 +133,22 @@ impl Scanner {
     pub fn add_pattern(&mut self, pattern: &str) -> Result<(), ScannerError> {
         let gitattributes = self.repo_root.join(".gitattributes");
 
-        // Check if pattern already exists
+        // Check if pattern already exists (accept both old and new filter name)
         if gitattributes.exists() {
             let content = fs::read_to_string(&gitattributes)?;
             for line in content.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.first() == Some(&pattern) && line.contains("filter=lfs") {
+                if parts.first() == Some(&pattern)
+                    && (line.contains("filter=gg-lfs") || line.contains("filter=lfs"))
+                {
                     // Pattern already exists
                     return Ok(());
                 }
             }
         }
 
-        // Append the pattern
-        let line = format!("{} filter=lfs diff=lfs merge=lfs -text\n", pattern);
+        // Append the pattern with new filter name
+        let line = format!("{} filter=gg-lfs diff=gg-lfs merge=gg-lfs -text\n", pattern);
         let mut content = if gitattributes.exists() {
             let existing = fs::read_to_string(&gitattributes)?;
             if existing.ends_with('\n') {
@@ -180,7 +183,9 @@ impl Scanner {
 
         for line in content.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.first() == Some(&pattern) && line.contains("filter=lfs") {
+            if parts.first() == Some(&pattern)
+                && (line.contains("filter=gg-lfs") || line.contains("filter=lfs"))
+            {
                 removed = true;
                 continue;
             }
@@ -201,54 +206,32 @@ impl Scanner {
         Ok(removed)
     }
 
-    /// Scan the repository for files matching LFS patterns
+    /// Scan the repository for files matching LFS patterns.
+    /// Respects .gitignore, .git/info/exclude, and global git excludes.
     pub fn scan_files(&self) -> Result<Vec<PathBuf>, ScannerError> {
         let mut files = Vec::new();
-        let mut visited = HashSet::new();
 
-        self.scan_directory(&self.repo_root, &mut files, &mut visited)?;
-
-        Ok(files)
-    }
-
-    /// Recursively scan a directory
-    fn scan_directory(
-        &self,
-        dir: &Path,
-        files: &mut Vec<PathBuf>,
-        visited: &mut HashSet<PathBuf>,
-    ) -> Result<(), ScannerError> {
-        if !dir.is_dir() {
-            return Ok(());
-        }
-
-        // Skip .git directory
-        if dir.file_name().map(|n| n == ".git").unwrap_or(false) {
-            return Ok(());
-        }
-
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if visited.contains(&path) {
+        for entry in WalkBuilder::new(&self.repo_root)
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .build()
+        {
+            let entry = entry.map_err(|e| {
+                ScannerError::Io(io::Error::new(io::ErrorKind::Other, e))
+            })?;
+            if !entry.path().is_file() {
                 continue;
             }
-            visited.insert(path.clone());
-
-            if path.is_dir() {
-                self.scan_directory(&path, files, visited)?;
-            } else if path.is_file() {
-                // Get relative path for pattern matching
-                if let Ok(relative) = path.strip_prefix(&self.repo_root) {
-                    if self.is_lfs_file(relative) {
-                        files.push(path);
-                    }
+            if let Ok(rel) = entry.path().strip_prefix(&self.repo_root) {
+                if self.is_lfs_file(rel) {
+                    files.push(entry.into_path());
                 }
             }
         }
 
-        Ok(())
+        Ok(files)
     }
 }
 

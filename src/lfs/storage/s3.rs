@@ -145,18 +145,10 @@ impl Storage for S3Storage {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        // Stream body to file
-        let body = response
-            .body
-            .collect()
-            .await
-            .map_err(|e| StorageError::AwsSdk(e.to_string()))?;
-
-        let bytes = body.into_bytes();
-        let size = bytes.len() as u64;
-
+        // Stream body to file (avoids loading entire object into memory)
+        let mut body_stream = response.body.into_async_read();
         let mut file = File::create(dest).await?;
-        file.write_all(&bytes).await?;
+        let size = tokio::io::copy(&mut body_stream, &mut file).await?;
         file.flush().await?;
 
         Ok(DownloadResult {

@@ -11,10 +11,12 @@
 //! 4. Cache in gg's local cache
 //! 5. Uninstall git-lfs hooks (optional)
 
-use crate::lfs::storage::{S3Config, S3Storage, Storage};
+use crate::lfs::storage;
 use crate::lfs::{Cache, LfsConfig, Pointer, Scanner};
 use clap::Args;
 use colored::Colorize;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -92,7 +94,7 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
         )
     })?;
 
-    let storage = create_storage(&config).await?;
+    let storage = storage::create_storage(&config).await?;
 
     // Step 3: Fetch all LFS objects from git-lfs server
     if !args.skip_fetch {
@@ -145,6 +147,17 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
         return Ok(());
     }
 
+    let show_progress = !args.dry_run && std::io::stderr().is_terminal();
+    let pb = if show_progress {
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("  {bar:30} {pos}/{len} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()));
+        Some(pb)
+    } else {
+        None
+    };
+
     println!(
         "\n{} {} file(s) to {} ({} pointers, {} expanded)...",
         if args.dry_run {
@@ -179,13 +192,9 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
 
         // Check if already in S3
         if storage.exists(oid).await? {
-            println!(
-                "  {} {} (already in S3)",
-                "Skip:".dimmed(),
-                relative.display()
-            );
             cache_from_gitlfs(&lfs_objects_dir, oid, &cache);
             skipped += 1;
+            if let Some(ref pb) = pb { pb.inc(1); }
             continue;
         }
 
@@ -196,29 +205,20 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
                 match storage.upload(oid, &lfs_path).await {
                     Ok(_) => {
                         cache.put_file(oid, &lfs_path)?;
-                        println!(
-                            "  {} {} ({} bytes)",
-                            "Uploaded:".green(),
-                            relative.display(),
-                            pointer.size
-                        );
                         uploaded += 1;
                     }
                     Err(e) => {
-                        eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e);
+                        if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e)); }
                         errors += 1;
                     }
                 }
             }
             None => {
-                eprintln!(
-                    "  {} {} - not found in git-lfs cache (try 'git lfs fetch --all')",
-                    "Missing:".red(),
-                    relative.display()
-                );
+                if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - not found in git-lfs cache (try 'git lfs fetch --all')", "Missing:".red(), relative.display())); }
                 errors += 1;
             }
         }
+        if let Some(ref pb) = pb { pb.inc(1); }
     }
 
     // Handle real files (smudge-expanded): upload directly, then replace with pointer
@@ -240,17 +240,11 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
         // Upload to S3 if not already there
         if !storage.exists(oid).await? {
             match storage.upload(oid, file_path).await {
-                Ok(_) => {
-                    println!(
-                        "  {} {} ({} bytes)",
-                        "Uploaded:".green(),
-                        relative.display(),
-                        pointer.size
-                    );
-                }
+                Ok(_) => {}
                 Err(e) => {
-                    eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e);
+                    if let Some(ref pb) = pb { pb.suspend(|| eprintln!("  {} {} - {}", "Failed:".red(), relative.display(), e)); }
                     errors += 1;
+                    if let Some(ref pb) = pb { pb.inc(1); }
                     continue;
                 }
             }
@@ -261,13 +255,10 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
         pointer.write(file_path)?;
         uploaded += 1;
 
-        println!(
-            "  {} {} ({} bytes)",
-            "Converted:".green(),
-            relative.display(),
-            pointer.size
-        );
+        if let Some(ref pb) = pb { pb.inc(1); }
     }
+
+    if let Some(pb) = pb { pb.finish_and_clear(); }
 
     // Step 6: Uninstall git-lfs (unless --keep-gitlfs)
     if !args.keep_gitlfs && !args.dry_run {
@@ -322,7 +313,7 @@ async fn run_inner(args: MigrateArgs) -> Result<(), Box<dyn std::error::Error>> 
             );
             println!(
                 "{}",
-                "The .gitattributes file still has filter=lfs entries which gg lfs uses.".dimmed()
+                "The .gitattributes file has filter entries which gg lfs uses.".dimmed()
             );
         }
     }
@@ -365,27 +356,6 @@ fn cache_from_gitlfs(lfs_objects_dir: &Path, oid: &str, cache: &Cache) {
     if let Some(lfs_path) = find_gitlfs_object(lfs_objects_dir, oid) {
         let _ = cache.put_file(oid, &lfs_path);
     }
-}
-
-/// Create storage backend from config
-async fn create_storage(
-    config: &LfsConfig,
-) -> Result<Box<dyn Storage>, Box<dyn std::error::Error>> {
-    let s3_config = S3Config {
-        bucket: config.storage.bucket.clone(),
-        region: config.storage.region.clone(),
-        prefix: config.storage.prefix.clone(),
-        endpoint: config.storage.endpoint.clone(),
-        credentials: config.storage.credentials.as_ref().map(|c| {
-            crate::lfs::storage::s3::S3Credentials {
-                access_key_id: c.access_key_id.clone(),
-                secret_access_key: c.secret_access_key.clone(),
-            }
-        }),
-    };
-
-    let storage = S3Storage::new(s3_config).await?;
-    Ok(Box::new(storage))
 }
 
 #[cfg(test)]

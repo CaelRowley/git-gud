@@ -30,6 +30,8 @@ serde = { version = "1", features = ["derive"] }
 dirs = "5"
 thiserror = "1"
 async-trait = "0.1"
+ignore = "0.4"
+indicatif = "0.17"
 
 [[bin]]
 name = "gg"
